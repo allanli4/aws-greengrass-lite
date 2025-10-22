@@ -75,7 +75,7 @@ may want to get certificate for the device using
 Then run:
 
 ```
-sudo mkdir /etc/greengrass/ggcredentials
+sudo mkdir -p /etc/greengrass/ggcredentials
 //cp your aws credentials(device certificates, private key, root ca) to this folder
 chown -R ggcore:ggcore /etc/greengrass/ggcredentials
 
