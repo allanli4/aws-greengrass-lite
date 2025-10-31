@@ -1,0 +1,32 @@
+---
+RecipeFormatVersion: "2020-01-25"
+ComponentName: "com.example.SystemMonitorC"
+ComponentVersion: "1.1.5"
+ComponentType: "aws.greengrass.generic"
+ComponentDescription: "Device agent component with JSON command execution via IoT Core MQTT"
+ComponentPublisher: "Example Corp"
+ComponentConfiguration:
+  DefaultConfiguration:
+    runWithDefault:
+      posixUser: "root:root"
+    accessControl:
+      aws.greengrass.ipc.mqttproxy:
+        "com.example.SystemMonitorC:pubsub:1":
+          policyDescription: "Allows device agent communication via IoT Core"
+          operations:
+            - "aws.greengrass#PublishToIoTCore"
+            - "aws.greengrass#SubscribeToIoTCore"
+          resources:
+            - "device/telemetry"
+            - "greengrass/device-agent/*/commands"
+            - "greengrass/device-agent/*/logs"
+Manifests:
+  - Platform:
+      os: linux
+      architecture: amd64
+      runtime: aws_nucleus_lite
+    Lifecycle:
+      run:
+        Script: "{artifacts:path}/system-monitor"
+    Artifacts:
+      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.SystemMonitorC/1.1.5/system-monitor"
