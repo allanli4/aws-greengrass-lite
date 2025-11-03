@@ -14,8 +14,6 @@
 #include <sys/wait.h>
 
 // Forward declarations
-static float get_cpu_usage(void);
-static float get_memory_usage(void);
 static char* get_device_id(void);
 
 // Command queue for deferred processing
@@ -50,7 +48,7 @@ static void command_handler(
 static void process_pending_command(void) {
     if (!has_pending_command) return;
     
-    char response[2048];
+    char response[128*1024];
     char client_token[64] = {0};
     // char shell[64] = "/bin/bash";
     char script[512] = {0};
@@ -88,8 +86,8 @@ static void process_pending_command(void) {
     }
     
     if (strlen(script) == 0) {
-        char examples[1500] = "See examples.txt file for command formats";
-        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.2/examples.txt", "r");
+        char examples[4096] = "See examples.txt file for command formats";
+        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.5/examples.txt", "r");
         if (examples_file) {
             size_t read_len = fread(examples, 1, sizeof(examples)-1, examples_file);
             examples[read_len] = '\0';
@@ -107,12 +105,12 @@ static void process_pending_command(void) {
         // Execute the script
         FILE *fp = popen(script, "r");
         if (fp) {
-            char stdout_output[1024] = {0};
+            char stdout_output[120*1024] = {0};
             size_t len = fread(stdout_output, 1, sizeof(stdout_output)-1, fp);
             int exit_code = pclose(fp);
             
             if (len == 0) {
-                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.2/examples.txt", "r");
+                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.5/examples.txt", "r");
                 if (examples_file) {
                     len = fread(stdout_output, 1, sizeof(stdout_output)-1, examples_file);
                     stdout_output[len] = '\0';
@@ -155,50 +153,6 @@ static void process_pending_command(void) {
     }
     
     has_pending_command = false;
-}
-
-// Read CPU usage from /proc/stat
-static float get_cpu_usage(void) {
-    static unsigned long prev_idle = 0, prev_total = 0;
-    FILE *fp = fopen("/proc/stat", "r");
-    if (!fp) return -1.0;
-    
-    unsigned long user, nice, system, idle, iowait, irq, softirq;
-    if (fscanf(fp, "cpu %lu %lu %lu %lu %lu %lu %lu", 
-               &user, &nice, &system, &idle, &iowait, &irq, &softirq) != 7) {
-        fclose(fp);
-        return -1.0;
-    }
-    fclose(fp);
-    
-    unsigned long total = user + nice + system + idle + iowait + irq + softirq;
-    unsigned long diff_idle = idle - prev_idle;
-    unsigned long diff_total = total - prev_total;
-    
-    float cpu_percent = (diff_total == 0) ? 0.0 : (diff_total - diff_idle) * 100.0 / diff_total;
-    
-    prev_idle = idle;
-    prev_total = total;
-    
-    return cpu_percent;
-}
-
-// Read memory usage from /proc/meminfo
-static float get_memory_usage(void) {
-    FILE *fp = fopen("/proc/meminfo", "r");
-    if (!fp) return -1.0;
-    
-    unsigned long mem_total = 0, mem_available = 0;
-    char line[256];
-    
-    while (fgets(line, sizeof(line), fp)) {
-        if (sscanf(line, "MemTotal: %lu kB", &mem_total) == 1) continue;
-        if (sscanf(line, "MemAvailable: %lu kB", &mem_available) == 1) break;
-    }
-    fclose(fp);
-    
-    if (mem_total == 0) return -1.0;
-    return ((float)(mem_total - mem_available) / mem_total) * 100.0;
 }
 
 // Get device ID from config.yaml
@@ -278,37 +232,6 @@ int main(void) {
     while (true) {
         // Process any pending commands
         process_pending_command();
-        
-        float cpu_usage = get_cpu_usage();
-        float memory_usage = get_memory_usage();
-        time_t now = time(NULL);
-        
-        // Create JSON telemetry message
-        char telemetry[512];
-        snprintf(telemetry, sizeof(telemetry),
-            "{"
-            "\"timestamp\":%ld,"
-            "\"cpu_percent\":%.2f,"
-            "\"memory_percent\":%.2f,"
-            "\"device_id\":\"gglite-monitor-c-1.2.3\""
-            "}",
-            now, cpu_usage, memory_usage
-        );
-        
-        // Publish to IoT Core using GGL SDK
-        ret = ggipc_publish_to_iot_core(
-            GGL_STR("device/telemetry"), 
-            ggl_buffer_from_null_term(telemetry), 
-            0
-        );
-        
-        if (ret != GGL_ERR_OK) {
-            fprintf(stderr, "Failed to publish telemetry.\n");
-        } else {
-            printf("Published: %s\n", telemetry);
-        }
-        
-        sleep(30); // Publish every 30 seconds
     }
     
     return 0;

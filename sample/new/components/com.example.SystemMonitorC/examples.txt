@@ -33,3 +33,4 @@ Network:
 Note: 
 Use single quotes (') instead of double quotes (\") for parameters with spaces to avoid JSON parsing issues.
 Also check for component status for unhealth device
+Always use journalctl to check for the reason, you can check as many lines of log as you want.

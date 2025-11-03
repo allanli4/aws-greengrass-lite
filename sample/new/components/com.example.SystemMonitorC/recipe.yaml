@@ -1,7 +1,7 @@
 ---
 RecipeFormatVersion: "2020-01-25"
 ComponentName: "com.example.SystemMonitorC"
-ComponentVersion: "1.2.3"
+ComponentVersion: "1.2.5"
 ComponentType: "aws.greengrass.generic"
 ComponentDescription: "Device agent component with JSON command execution via IoT Core MQTT"
 ComponentPublisher: "Example Corp"
@@ -17,7 +17,6 @@ ComponentConfiguration:
             - "aws.greengrass#PublishToIoTCore"
             - "aws.greengrass#SubscribeToIoTCore"
           resources:
-            - "device/telemetry"
             - "greengrass/device-agent/*/commands"
             - "greengrass/device-agent/*/logs"
 Manifests:
@@ -29,5 +28,5 @@ Manifests:
       run:
         Script: "{artifacts:path}/system-monitor"
     Artifacts:
-      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.SystemMonitorC/1.2.3/system-monitor"
-      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.SystemMonitorC/1.2.3/examples.txt"
+      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.SystemMonitorC/1.2.5/system-monitor"
+      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.SystemMonitorC/1.2.5/examples.txt"
