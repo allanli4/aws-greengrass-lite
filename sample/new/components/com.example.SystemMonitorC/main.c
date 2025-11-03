@@ -88,9 +88,21 @@ static void process_pending_command(void) {
     }
     
     if (strlen(script) == 0) {
+        char examples[1500] = "See examples.txt file for command formats";
+        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.2/examples.txt", "r");
+        if (examples_file) {
+            size_t read_len = fread(examples, 1, sizeof(examples)-1, examples_file);
+            examples[read_len] = '\0';
+            fclose(examples_file);
+            // Replace newlines with spaces for JSON
+            for (size_t i = 0; i < read_len; i++) {
+                if (examples[i] == '\n') examples[i] = ' ';
+                if (examples[i] == '"') examples[i] = '\'';
+            }
+        }
         snprintf(response, sizeof(response),
-            "{\"clientToken\":\"%s\",\"stdout\":\"\",\"stderr\":\"No script provided\",\"exitCode\":1}",
-            client_token);
+            "{\"clientToken\":\"%s\",\"stdout\":\"%s\",\"stderr\":\"No script provided\",\"exitCode\":1}",
+            client_token, examples);
     } else {
         // Execute the script
         FILE *fp = popen(script, "r");
@@ -98,6 +110,18 @@ static void process_pending_command(void) {
             char stdout_output[1024] = {0};
             size_t len = fread(stdout_output, 1, sizeof(stdout_output)-1, fp);
             int exit_code = pclose(fp);
+            
+            if (len == 0) {
+                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.SystemMonitorC/1.2.2/examples.txt", "r");
+                if (examples_file) {
+                    len = fread(stdout_output, 1, sizeof(stdout_output)-1, examples_file);
+                    stdout_output[len] = '\0';
+                    fclose(examples_file);
+                } else {
+                    strcpy(stdout_output, "Command returned no output. Examples file not found.");
+                    len = strlen(stdout_output);
+                }
+            }
             
             // Escape quotes and newlines for JSON
             for (size_t i = 0; i < len; i++) {
@@ -266,7 +290,7 @@ int main(void) {
             "\"timestamp\":%ld,"
             "\"cpu_percent\":%.2f,"
             "\"memory_percent\":%.2f,"
-            "\"device_id\":\"gglite-monitor-c\""
+            "\"device_id\":\"gglite-monitor-c-1.2.3\""
             "}",
             now, cpu_usage, memory_usage
         );

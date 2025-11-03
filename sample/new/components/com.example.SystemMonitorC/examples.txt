@@ -1,0 +1,35 @@
+Device Agent Command Examples:
+
+Basic Commands:
+{"clientToken":"cmd1","script":"uname -a"}
+{"clientToken":"cmd2","script":"df -h"}
+{"clientToken":"cmd3","script":"ps aux | head -10"}
+
+System Information:
+{"clientToken":"sysinfo","script":"uname -a"}
+{"clientToken":"uptime","script":"uptime"}
+{"clientToken":"whoami","script":"whoami"}
+
+Disk & Memory:
+{"clientToken":"disk","script":"df -h"}
+{"clientToken":"memory","script":"free -h"}
+{"clientToken":"diskusage","script":"du -sh /var/lib/greengrass"}
+
+Service Status:
+{"clientToken":"status","script":"systemctl status ggl.com.example.SystemMonitorC.service"}
+
+Check for all Components on Device:
+{"clientToken":"deps","script":"systemctl list-dependencies greengrass-lite.target"}
+
+Log Commands (use single quotes for timestamps):
+{"clientToken":"logs","script":"journalctl -u ggl.com.example.SystemMonitorC.service --lines=10 --no-pager"}
+{"clientToken":"recent","script":"journalctl --since '1 hour ago' --no-pager -n 20"}
+{"clientToken":"errors","script":"journalctl --priority=err --since '1 hour ago' --no-pager"}
+
+Network:
+{"clientToken":"network","script":"ip addr show"}
+{"clientToken":"routes","script":"ip route"}
+
+Note: 
+Use single quotes (') instead of double quotes (\") for parameters with spaces to avoid JSON parsing issues.
+Also check for component status for unhealth device
