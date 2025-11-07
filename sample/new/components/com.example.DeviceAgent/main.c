@@ -14,12 +14,12 @@
 #include <sys/wait.h>
 
 // Forward declarations
-static char* get_device_id(void);
+static char* get_thing_name(void);
 
 // Command queue for deferred processing
 static char pending_command[256] = {0};
 static bool has_pending_command = false;
-static char device_id[64] = {0};
+static char thing_name[64] = {0};
 
 // Command handler for incoming IoT Core messages
 static void command_handler(
@@ -85,7 +85,7 @@ static void process_pending_command(void) {
     
     if (strlen(script) == 0) {
         char examples[4096] = "See examples.txt file for command formats";
-        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.1/examples.txt", "r");
+        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.8/examples.txt", "r");
         if (examples_file) {
             size_t read_len = fread(examples, 1, sizeof(examples)-1, examples_file);
             examples[read_len] = '\0';
@@ -108,7 +108,7 @@ static void process_pending_command(void) {
             int exit_code = pclose(fp);
             
             if (len == 0) {
-                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.1/examples.txt", "r");
+                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.8/examples.txt", "r");
                 if (examples_file) {
                     len = fread(stdout_output, 1, sizeof(stdout_output)-1, examples_file);
                     stdout_output[len] = '\0';
@@ -136,7 +136,7 @@ static void process_pending_command(void) {
     }
     
     char response_topic[128];
-    snprintf(response_topic, sizeof(response_topic), "greengrass/device-agent/%s/logs", device_id);
+    snprintf(response_topic, sizeof(response_topic), "greengrass/device-agent/%s/logs", thing_name);
     
     GglError ret = ggipc_publish_to_iot_core(
         ggl_buffer_from_null_term(response_topic), 
@@ -153,39 +153,21 @@ static void process_pending_command(void) {
     has_pending_command = false;
 }
 
-// Get device ID from config.yaml
-static char* get_device_id(void) {
+// Get thing name from environment variable
+static char* get_thing_name(void) {
     static char thing_name[64] = {0};
     if (strlen(thing_name) > 0) return thing_name;
     
-    FILE *fp = fopen("/etc/greengrass/config.yaml", "r");
-    if (fp) {
-        char line[256];
-        while (fgets(line, sizeof(line), fp)) {
-            if (strstr(line, "thingName:")) {
-                char *start = strchr(line, '"');
-                if (start) {
-                    start++;
-                    char *end = strchr(start, '"');
-                    if (end) {
-                        size_t len = end - start;
-                        if (len < sizeof(thing_name)) {
-                            strncpy(thing_name, start, len);
-                            thing_name[len] = '\0';
-                        }
-                    }
-                }
-                break;
-            }
-        }
-        fclose(fp);
+    char *env_thing_name = getenv("AWS_IOT_THING_NAME");
+    if (env_thing_name && strlen(env_thing_name) > 0) {
+        strncpy(thing_name, env_thing_name, sizeof(thing_name) - 1);
+        thing_name[sizeof(thing_name) - 1] = '\0';
+        printf("Using thing name from environment: %s\n", thing_name);
+        return thing_name;
     }
     
-    if (strlen(thing_name) == 0) {
-        strcpy(thing_name, "unknown-device");
-    }
-    
-    printf("Using thing name from config: %s\n", thing_name);
+    strcpy(thing_name, "unknown-device");
+    printf("Using default thing name: %s\n", thing_name);
     return thing_name;
 }
 
@@ -205,13 +187,13 @@ int main(void) {
     }
     printf("Connected to Greengrass Lite.\n");
     
-    // Get device ID
-    strcpy(device_id, get_device_id());
-    printf("Device ID: %s\n", device_id);
+    // Get thing name
+    strcpy(thing_name, get_thing_name());
+    printf("Thing name: %s\n", thing_name);
     
     // Subscribe to device agent commands via IoT Core
     char command_topic[128];
-    snprintf(command_topic, sizeof(command_topic), "greengrass/device-agent/%s/commands", device_id);
+    snprintf(command_topic, sizeof(command_topic), "greengrass/device-agent/%s/commands", thing_name);
     
     ret = ggipc_subscribe_to_iot_core(
         ggl_buffer_from_null_term(command_topic), 
