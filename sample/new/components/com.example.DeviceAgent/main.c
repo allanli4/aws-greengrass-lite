@@ -85,7 +85,7 @@ static void process_pending_command(void) {
     
     if (strlen(script) == 0) {
         char examples[4096] = "See examples.txt file for command formats";
-        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.8/examples.txt", "r");
+        FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.2.1/examples.txt", "r");
         if (examples_file) {
             size_t read_len = fread(examples, 1, sizeof(examples)-1, examples_file);
             examples[read_len] = '\0';
@@ -100,38 +100,76 @@ static void process_pending_command(void) {
             "{\"clientToken\":\"%s\",\"stdout\":\"%s\",\"stderr\":\"No script provided\",\"exitCode\":1}",
             client_token, examples);
     } else {
-        // Execute the script
-        FILE *fp = popen(script, "r");
-        if (fp) {
-            char stdout_output[90*1024] = {0};  // ~90KB for command output
-            size_t len = fread(stdout_output, 1, sizeof(stdout_output)-1, fp);
-            int exit_code = pclose(fp);
-            
-            if (len == 0) {
-                FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.0.8/examples.txt", "r");
-                if (examples_file) {
-                    len = fread(stdout_output, 1, sizeof(stdout_output)-1, examples_file);
-                    stdout_output[len] = '\0';
-                    fclose(examples_file);
-                } else {
-                    strcpy(stdout_output, "Command returned no output. Examples file not found.");
-                    len = strlen(stdout_output);
-                }
-            }
-            
-            // Escape quotes and newlines for JSON
-            for (size_t i = 0; i < len; i++) {
-                if (stdout_output[i] == '"') stdout_output[i] = '\'';
-                if (stdout_output[i] == '\n') stdout_output[i] = ' ';
-            }
-            
+        // Execute the script with separate stdout/stderr capture
+        int stdout_pipe[2], stderr_pipe[2];
+        char stdout_output[45*1024] = {0};  // ~45KB for stdout
+        char stderr_output[45*1024] = {0};  // ~45KB for stderr
+        
+        if (pipe(stdout_pipe) == -1 || pipe(stderr_pipe) == -1) {
             snprintf(response, sizeof(response),
-                "{\"clientToken\":\"%s\",\"stdout\":\"%s\",\"stderr\":\"\",\"exitCode\":%d}",
-                client_token, stdout_output, WEXITSTATUS(exit_code));
-        } else {
-            snprintf(response, sizeof(response),
-                "{\"clientToken\":\"%s\",\"stdout\":\"\",\"stderr\":\"Failed to execute script\",\"exitCode\":1}",
+                "{\"clientToken\":\"%s\",\"stdout\":\"\",\"stderr\":\"Failed to create pipes\",\"exitCode\":1}",
                 client_token);
+        } else {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Child process
+                close(stdout_pipe[0]);
+                close(stderr_pipe[0]);
+                dup2(stdout_pipe[1], STDOUT_FILENO);
+                dup2(stderr_pipe[1], STDERR_FILENO);
+                close(stdout_pipe[1]);
+                close(stderr_pipe[1]);
+                execl("/bin/sh", "sh", "-c", script, NULL);
+                exit(127);
+            } else if (pid > 0) {
+                // Parent process
+                close(stdout_pipe[1]);
+                close(stderr_pipe[1]);
+                
+                size_t stdout_len = read(stdout_pipe[0], stdout_output, sizeof(stdout_output)-1);
+                size_t stderr_len = read(stderr_pipe[0], stderr_output, sizeof(stderr_output)-1);
+                
+                close(stdout_pipe[0]);
+                close(stderr_pipe[0]);
+                
+                int status;
+                waitpid(pid, &status, 0);
+                int exit_code = WEXITSTATUS(status);
+                
+                if (stdout_len == 0) {
+                    FILE *examples_file = fopen("/var/lib/greengrass/packages/artifacts/com.example.DeviceAgent/1.2.1/examples.txt", "r");
+                    if (examples_file) {
+                        stdout_len = fread(stdout_output, 1, sizeof(stdout_output)-1, examples_file);
+                        stdout_output[stdout_len] = '\0';
+                        fclose(examples_file);
+                    } else {
+                        strcpy(stdout_output, "Command returned no output. Examples file not found.");
+                        stdout_len = strlen(stdout_output);
+                    }
+                }
+                
+                // Null terminate outputs
+                stdout_output[stdout_len] = '\0';
+                stderr_output[stderr_len] = '\0';
+                
+                // Escape quotes and newlines for JSON in both outputs
+                for (size_t i = 0; i < stdout_len; i++) {
+                    if (stdout_output[i] == '"') stdout_output[i] = '\'';
+                    if (stdout_output[i] == '\n') stdout_output[i] = ' ';
+                }
+                for (size_t i = 0; i < stderr_len; i++) {
+                    if (stderr_output[i] == '"') stderr_output[i] = '\'';
+                    if (stderr_output[i] == '\n') stderr_output[i] = ' ';
+                }
+                
+                snprintf(response, sizeof(response),
+                    "{\"clientToken\":\"%s\",\"stdout\":\"%s\",\"stderr\":\"%s\",\"exitCode\":%d}",
+                    client_token, stdout_output, stderr_output, exit_code);
+            } else {
+                snprintf(response, sizeof(response),
+                    "{\"clientToken\":\"%s\",\"stdout\":\"\",\"stderr\":\"Failed to fork process\",\"exitCode\":1}",
+                    client_token);
+            }
         }
     }
     

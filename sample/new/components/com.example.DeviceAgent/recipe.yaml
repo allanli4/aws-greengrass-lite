@@ -1,14 +1,12 @@
 ---
 RecipeFormatVersion: "2020-01-25"
 ComponentName: "com.example.DeviceAgent"
-ComponentVersion: "1.0.8"
+ComponentVersion: "1.2.1"
 ComponentType: "aws.greengrass.generic"
 ComponentDescription: "Device agent component with JSON command execution via IoT Core MQTT"
 ComponentPublisher: "liallan"
 ComponentConfiguration:
   DefaultConfiguration:
-    runWithDefault:
-      posixUser: "root:root"
     accessControl:
       aws.greengrass.ipc.mqttproxy:
         "com.example.DeviceAgent:pubsub:1":
@@ -25,13 +23,19 @@ Manifests:
       architecture: amd64
       runtime: "*"
     Lifecycle:
+      install:
+        Script: |
+          # Add journalctl access for both possible users
+          sudo usermod -a -G systemd-journal ggc_user 2>/dev/null || true
+          sudo usermod -a -G systemd-journal ggcore 2>/dev/null || true
+        RequiresPrivilege: true
       run:
         Script: "{artifacts:path}/device-agent"
     Artifacts:
-      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.DeviceAgent/1.0.8/device-agent"
+      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.DeviceAgent/1.2.1/device-agent"
         Permission:
           Read: "ALL"
           Execute: "ALL"
-      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.DeviceAgent/1.0.8/examples.txt"
+      - URI: "s3://liallan-greengrass-1759529680-us-west-2-728399045110/com.example.DeviceAgent/1.2.1/examples.txt"
         Permission:
           Read: "ALL"
