@@ -5,10 +5,13 @@
 #ifndef GGL_FLEETPROV_PKI_OPS_H
 #define GGL_FLEETPROV_PKI_OPS_H
 
-#include <ggl/error.h>
+#include <gg/error.h>
 
-GglError ggl_pki_generate_keypair(
-    int private_key_fd, int public_key_fd, int csr_fd, const char *common_name
+GgError ggl_pki_generate_keypair(
+    int private_key_fd, int csr_fd, const char *common_name
 );
 
+GgError ggl_tpm_pki_generate_csr(
+    int csr_fd, const char *common_name, const char *tpm_handle_path
+);
 #endif

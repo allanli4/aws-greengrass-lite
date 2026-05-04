@@ -2,10 +2,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "iotcored.h"
 #include <argp.h>
-#include <ggl/error.h>
+#include <gg/error.h>
 #include <ggl/nucleus/init.h>
+#include <iotcored.h>
 
 static char doc[] = "iotcored -- MQTT spooler for AWS IoT Core";
 
@@ -59,8 +59,8 @@ int main(int argc, char **argv) {
 
     ggl_nucleus_init();
 
-    GglError ret = run_iotcored(&args);
-    if (ret != GGL_ERR_OK) {
+    GgError ret = run_iotcored(&args);
+    if (ret != GG_ERR_OK) {
         return 1;
     }
 }

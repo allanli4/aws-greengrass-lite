@@ -2,11 +2,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef URIPARSE_TEST_H
-#define URIPARSE_TEST_H
+#ifndef GGDEPLOYMENTD_ARTIFACT_PERMISSION_H
+#define GGDEPLOYMENTD_ARTIFACT_PERMISSION_H
 
-#include <ggl/error.h>
+#include <gg/types.h>
+#include <sys/types.h>
 
-GglError run_cli_runner(void);
+mode_t artifact_permission_to_mode(GgMap permission_map);
 
 #endif

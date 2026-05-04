@@ -5,9 +5,9 @@
 #ifndef VALIDATE_ARGS_H
 #define VALIDATE_ARGS_H
 
-#include "ggl/recipe2unit.h"
-#include <ggl/error.h>
+#include <gg/error.h>
+#include <ggl/recipe2unit.h>
 
-GglError validate_args(Recipe2UnitArgs *args);
+GgError validate_args(Recipe2UnitArgs *args);
 
 #endif

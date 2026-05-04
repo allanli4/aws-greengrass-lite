@@ -4,11 +4,11 @@
 
 ggl_init_module(
   fleet-provision
-  LIBS ggl-sdk
+  LIBS gg-sdk
        ggl-common
        aws-iot-call
        core-bus
-       ggl-exec
+       ggl-process
        ggl-binpath
        core-bus-gg-config
        core-bus-aws-iot-mqtt

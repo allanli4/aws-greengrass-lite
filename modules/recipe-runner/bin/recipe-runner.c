@@ -2,10 +2,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "recipe-runner.h"
 #include <argp.h>
-#include <ggl/error.h>
+#include <gg/error.h>
 #include <ggl/nucleus/init.h>
+#include <recipe-runner.h>
 #include <stdlib.h>
 
 static char doc[] = "recipe-runner -- Launch a Greengrass recipe file";
@@ -53,6 +53,6 @@ int main(int argc, char **argv) {
 
     ggl_nucleus_init();
 
-    GglError ret = run_recipe_runner(&args);
-    return ret != GGL_ERR_OK;
+    GgError ret = run_recipe_runner(&args);
+    return ret != GG_ERR_OK;
 }

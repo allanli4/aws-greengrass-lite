@@ -1,6 +1,6 @@
 # Design for the `ggconfigd` SQLITE implementation
 
-Implementing the [ggconfigd spec](../spec/components/ggconfigd.md), the
+Implementing the [ggconfigd spec](../spec/executable/ggconfigd.md), the
 ggconfigd implementation uses a relational database (sqlite) to persist the
 configuration.
 
@@ -208,6 +208,11 @@ timestamp may be updated), there is no reason that a subscriber cares about this
 event. Removing notifications for these events helps prevent unnecessary
 notifications and reactions to unnecessary notifications. Currently we don't
 have this suppression functionality, but it could be added in the future.
+
+This also applies to the `restore` operation, which currently notifies all
+active subscribers regardless of whether their key's value actually changed
+during the restore. A future improvement could compare pre- and post-restore
+values to suppress unnecessary notifications.
 
 ### Subscription behavior for keys which become deleted
 

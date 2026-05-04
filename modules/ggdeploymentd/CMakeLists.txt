@@ -4,11 +4,10 @@
 
 ggl_init_module(
   ggdeploymentd
-  LIBS ggl-sdk
+  LIBS gg-sdk
        ggl-constants
        ggl-common
        core-bus
-       ggl-backoff
        ggl-docker-client
        ggl-http
        ggl-uri
@@ -19,11 +18,14 @@ ggl_init_module(
        ggl-yaml
        ggl-zip
        ggl-process
-       ggl-exec
        aws-iot-call
        core-bus-gghealthd
        core-bus-gg-config
        core-bus-aws-iot-mqtt
        core-bus-sub-response
        recipe2unit
-       PkgConfig::uuid)
+       PkgConfig::uuid
+       PkgConfig::libsystemd)
+target_compile_definitions(
+  ggdeploymentd
+  PRIVATE "GGL_SYSTEMD_SYSTEM_GROUP=\"${GGL_SYSTEMD_SYSTEM_GROUP}\"")

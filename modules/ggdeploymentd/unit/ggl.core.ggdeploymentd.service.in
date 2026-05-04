@@ -7,7 +7,7 @@ PartOf=greengrass-lite.target
 WantedBy=greengrass-lite.target
 
 [Service]
-Type=exec
+Type=notify
 ExecStart=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@/@name@
 Restart=always
 RestartSec=1
@@ -20,9 +20,3 @@ WorkingDirectory=/var/lib/greengrass
 [Unit]
 Description=Greengrass Nucleus Lite deployment queue and processor
 After=ggl.core.ggconfigd.service
-After=ggl.core.iotcored.service
-After=ggl.core.tesd.service
-# Wait for network devices to be up
-After=network.target
-# Wait for NTP time
-After=systemd-time-wait-sync.service

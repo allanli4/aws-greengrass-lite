@@ -4,8 +4,8 @@
 
 ggl_init_module(
   ggl-docker-client
-  LIBS ggl-sdk
-       ggl-exec
+  LIBS gg-sdk
+       ggl-process
        core-bus-gg-config
        ggl-http
        core-bus

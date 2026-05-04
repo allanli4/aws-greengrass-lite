@@ -5,16 +5,21 @@
 #ifndef TOKEN_SERVICE_H
 #define TOKEN_SERVICE_H
 
-#include <ggl/buffer.h>
-#include <ggl/error.h>
+#include <gg/error.h>
+#include <gg/types.h>
 
-GglError initiate_request(
-    GglBuffer root_ca,
-    GglBuffer cert_path,
-    GglBuffer key_path,
-    GglBuffer thing_name,
-    GglBuffer role_alias,
-    GglBuffer cred_endpoint
+GgError initiate_request(
+    GgBuffer root_ca,
+    GgBuffer cert_path,
+    GgBuffer key_path,
+    GgBuffer thing_name,
+    GgBuffer role_alias,
+    GgBuffer cred_endpoint,
+    GgBuffer interface_name
 );
+
+/// Update the credential URL at runtime. Thread-safe.
+/// Re-reads both endpoint and role_alias from ggconfigd under a mutex.
+void tes_update_cred_url(void);
 
 #endif

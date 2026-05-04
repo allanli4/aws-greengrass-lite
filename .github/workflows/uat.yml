@@ -4,20 +4,66 @@ on:
   push:
     branches:
       - main
+      - "release/*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      testing_repo:
+        description: "Testing repository to use as source of tests"
+        required: false
+      testing_repo_ref:
+        description: "Ref (branch) on the testing repo to use"
+        required: false
 
 jobs:
+  list-tests:
+    if:
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name ==
+      'aws-greengrass/aws-greengrass-lite'
+    runs-on: ubuntu-24.04
+    outputs:
+      tests: ${{ steps.list.outputs.tests }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Checkout testing repository
+        uses: actions/checkout@v6
+        with:
+          repository:
+            ${{ github.event.inputs.testing_repo ||
+            'aws-greengrass/aws-greengrass-testing' }}
+          ref: ${{ github.event.inputs.testing_repo_ref || 'main' }}
+          path: aws-greengrass-testing
+
+      - name: List all tests
+        id: list
+        run: |
+          cd aws-greengrass-testing
+          IGNORE_FILE="${GITHUB_WORKSPACE}/.github/uat-ignore.txt"
+          tests=$(find src -name "aws-greengrass-testing-*.py" -exec grep -l "^def test_" {} \; | \
+            while read file; do
+              category=$(basename "$file" | sed 's/aws-greengrass-testing-\(.*\)\.py/\1/')
+              grep -h "^def test_" "$file" | sed 's/def \(test_[^(]*\).*/\1/' | \
+              while read test; do
+                if [ ! -f "$IGNORE_FILE" ] || ! grep -v '^#' "$IGNORE_FILE" | grep -qE "^($category:)?$test"; then
+                  echo "{\"name\":\"$test\",\"category\":\"$category\",\"timeout\":3900}"
+                fi
+              done
+            done | jq -s -c .)
+          echo "tests=$tests" >> $GITHUB_OUTPUT
+
   uat-test:
+    if:
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name ==
+      'aws-greengrass/aws-greengrass-lite'
+    needs: list-tests
     strategy:
       fail-fast: false
       matrix:
-        test-category:
-          [
-            { category: component, timeout: 1000 },
-            { category: deployment, timeout: 3900 },
-            { category: fleet-status, timeout: 1000 },
-            { category: runtime, timeout: 1000 },
-            { category: security, timeout: 1500 },
-          ]
+        test: ${{ fromJson(needs.list-tests.outputs.tests) }}
     permissions:
       id-token: write
       contents: read
@@ -25,8 +71,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout lite repository
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -34,19 +80,21 @@ jobs:
           python-version: ">=3.12"
 
       - name: Checkout testing repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          repository: aws-greengrass/aws-greengrass-testing
-          ref: python_testing
+          repository:
+            ${{ github.event.inputs.testing_repo ||
+            'aws-greengrass/aws-greengrass-testing' }}
+          ref: ${{ github.event.inputs.testing_repo_ref || 'main' }}
           path: aws-greengrass-testing
 
       - name: Get temporary AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5
         with:
           audience: sts.amazonaws.com
           aws-region: us-west-2
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          role-duration-seconds: ${{ matrix.test-category.timeout }}
+          role-to-assume: arn:aws:iam::832850273037:role/GGL-UAT-GH-Role
+          role-duration-seconds: ${{ matrix.test.timeout }}
           unset-current-credentials: true
 
       - name: Set sanitized SHA to github env
@@ -56,12 +104,13 @@ jobs:
           SANITIZED_SHA=$(echo "$PR_SHA" | tr -cd 'a-fA-F0-9')
           echo "SHA=$SANITIZED_SHA" >> $GITHUB_ENV
 
-      - name: Run UAT tests
+      - name: Run UAT test
         run: |
           cd aws-greengrass-testing
           ./run-tests.sh \
-            --aws-account=${{ secrets.AWS_ACCOUNT_ID }} \
-            --s3-bucket=${{ secrets.S3_BUCKET }} \
+            --aws-account=832850273037 \
+            --s3-bucket=lite-uat-bucket \
             --commit-id=${{ env.SHA }} \
             --aws-region=us-west-2 \
-            --test-category=${{ matrix.test-category.category }}
+            --test-category=${{ matrix.test.category }} \
+            --test-name=${{ matrix.test.name }}

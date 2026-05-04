@@ -20,6 +20,10 @@ topics mentioned in the
 > Note in this demo, we are using restrictive production policies, please double
 > check the policies accordingly.
 
+We also support TPM with fleet provisioning. You can store both the claim
+private key and the permanent private key in the TPM to generate certificates.
+Detailed instructions are shown below.
+
 ## Before getting started
 
 Before running fleet provisioning manually, you need to consider a few important
@@ -34,6 +38,8 @@ steps:
    [sample config below](#configyaml).
 4. If this is not your first run, remove the socket at
    `/run/greengrass/iotcoredfleet`, if it exists.
+5. If you want to enable TPM support, follow the
+   [TPM Setup step](../TPM_SUPPORT.md#tpm-setup).
 
 ## Setting up the cloud side for provisioning
 
@@ -71,10 +77,20 @@ CSR_COMMON_NAME="my-custom-name" ./generate_claim.sh
 
 If not specified, the default value "aws-greengrass-nucleus-lite" will be used.
 
+However, if you want to enable TPM support, make sure the
+[generate_claim_tpm.sh](./generate_claim_tpm.sh) script has execute permissions,
+and then run it instead.
+
+```
+chmod +x ./generate_claim_tpm.sh
+./generate_claim_tpm.sh
+```
+
 Once the stack is up and running, you should see the following resources in the
 cloud:
 
-- CloudFormation stack called `GreengrassFleetProvisioning`
+- CloudFormation stack called `GreengrassFleetProvisioning` (or
+  `GreengrassFleetProvisioning-TPM`)
   - IoT policies
   - IAM policies
   - Role and RoleAlias
@@ -95,10 +111,10 @@ Once you see all the resources in the cloud, you can continue to the next steps.
 
 ## Setting up the device side for provisioning
 
-Here, the template name is `GreengrassFleetProvisioningTemplate` and the
-template requires (based on the above example) you to provide only a MAC address
-as the serial number in the template parameter. Your nucleus config should
-roughly look as below:
+Here, the template name is `GGFleetProvisioningTemplate` (or
+`GGFleetProvisioningTemplate-TPM`) and the template requires (based on the above
+example) you to provide only a MAC address as the serial number in the template
+parameter. Your nucleus config should roughly look as below:
 
 ### `config.yaml`
 
@@ -132,6 +148,10 @@ services:
       templateName: "GreengrassFleetProvisioningTemplate" #[Modify here]
       templateParams:
         SerialNumber: "a2_b9_d2_5a_fd_f9" #[Modify here]
+      # Optional: Custom paths for generated certificates (defaults to /var/lib/greengrass/credentials/)
+      # csrPath: "/custom/path/cert_req.pem" #[Optional]
+      # certPath: "/custom/path/certificate.pem" #[Optional]
+      # keyPath: "/custom/path/priv_key" #[Optional]
 ```
 
 Things to note about the above config:
@@ -139,12 +159,34 @@ Things to note about the above config:
 1. You can copy and paste from the generated sample file `part.config.yaml`. The
    starting point is `aws.greengrass.fleet_provisioning` through `templateName`.
    Note that `templateParams` is still required.
-2. If you wish to move the certificate to a different location, then you need to
-   update the path accordingly.
+2. **Optional certificate paths**: You can specify custom paths for the
+   generated certificates using `csrPath`, `certPath`, and `keyPath`. If not
+   specified, files will be created in `/var/lib/greengrass/credentials/` by
+   default.
+   - `csrPath`: Path where the Certificate Signing Request (CSR) will be
+     generated
+   - `certPath`: Path where the device certificate will be stored
+   - `keyPath`: Path where the private key will be stored
+   - These paths can be used to customize both the location and filename of the
+     generated certificates (e.g., `/custom/dir/my-device-cert.pem`)
+   - Note: The CSR file is automatically removed after successful provisioning
+   - If custom paths are provided, only those specific files will be created at
+     the custom locations; other files will still use the default directory
+   - We also currently support specifying a custom persistent TPM handle for the
+     optional `keyPath`. e.g. `"handle:0x81000001"`
+3. The system configuration paths (`privateKeyPath`, `certificateFilePath`,
+   etc.) will be automatically updated after successful provisioning to point to
+   the generated certificate locations.
+4. If you enable TPM support, modify the `claimKeyPath` with a persistent
+   handle, e.g. `"handle:0x81000000"`
 
-Once completed, the config needs to be moved and all services need to be started
-(if not started already). Run the following command, assuming your current
-working directory is the root of the greengrass repository:
+Note: if you enable the TPM support, but the optional `keyPath` is not provided,
+we will directly use the `claimKeyPath` for the permanent private key.
+
+Once you have finished editing the `config.yaml` file with your fleet
+provisioning settings, deploy it to the system and start the Greengrass
+services. Run the following commands, assuming your current working directory is
+the root of the greengrass repository:
 
 ```sh
 mkdir -p /etc/greengrass
@@ -167,14 +209,20 @@ If you cannot find `fleet-provisioning` under `/usr/local/bin`, then reconfigure
 CMake with the flag `-D CMAKE_INSTALL_PREFIX=/usr/local`, rebuild, and
 reinstall.
 
-Here you can also add `--out_cert_path path/to/dir/` to provide an alternate
-directory. The default is `/var/lib/greengrass/credentials/`.
-
 This will trigger the fleet provisioning script, which will take a few minutes
 to complete.
 
 If you are storing the standard output, look for the log:
 `Process Complete, Your device is now provisioned`.
+
+Once successfully provisioned please restart the greengrass service with
+
+```
+sudo systemctl restart greengrass-lite.target
+```
+
+this will allow greengrass services to load the new config changes. And only
+then will the core device be visible in the console.
 
 > You might see some debug logs such as
 > `process is getting terminated by signal 15`. This is expected and correct

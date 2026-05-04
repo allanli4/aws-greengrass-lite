@@ -4,11 +4,10 @@
 
 ggl_init_module(
   iotcored
-  LIBS ggl-sdk
+  LIBS gg-sdk
        ggl-common
        core-bus
        core-bus-gg-config
        core_mqtt
-       ggl-backoff
        ggl-uri
        PkgConfig::openssl)

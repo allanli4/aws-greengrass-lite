@@ -2,10 +2,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ggpubsubd.h"
 #include <argp.h>
-#include <ggl/error.h>
+#include <gg/error.h>
 #include <ggl/nucleus/init.h>
+#include <ggpubsubd.h>
 #include <stdlib.h>
 
 static char doc[] = "ggpubsubd -- Greengrass Publish/Subscribe daemon";
@@ -35,8 +35,8 @@ int main(int argc, char **argv) {
 
     ggl_nucleus_init();
 
-    GglError ret = run_ggpubsubd();
-    if (ret != GGL_ERR_OK) {
+    GgError ret = run_ggpubsubd();
+    if (ret != GG_ERR_OK) {
         return 1;
     }
 }

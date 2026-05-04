@@ -14,7 +14,13 @@ option(BUILD_EXAMPLES "Build examples")
 
 option(ENABLE_WERROR "Compile warnings as errors")
 
-set(GGL_LOG_LEVEL CACHE STRING "GGL log level")
+set(GG_LOG_LEVEL CACHE STRING "GG log level")
+# Backwards compat
+if(GGL_LOG_LEVEL AND NOT GG_LOG_LEVEL)
+  set(GG_LOG_LEVEL
+      "${GGL_LOG_LEVEL}"
+      CACHE STRING "" FORCE)
+endif()
 
 option(GGL_SYSTEMD_SERVICE_BUILD "Install GGL as a set of systemd services"
        TRUE)
@@ -186,6 +192,20 @@ add_compile_definitions($<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=3>)
 
 file(READ version GGL_VERSION)
 string(STRIP "${GGL_VERSION}" GGL_VERSION)
+
+option(GGL_RELEASE "Build as release version without git hash" OFF)
+
+if(NOT GGL_RELEASE)
+  execute_process(
+    COMMAND git rev-parse --short=7 HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(GIT_COMMIT)
+    set(GGL_VERSION "${GGL_VERSION}-${GIT_COMMIT}")
+  endif()
+endif()
+
 add_compile_definitions("GGL_VERSION=\"${GGL_VERSION}\"")
 
 add_link_options($<$<NOT:$<CONFIG:Debug>>:-pie>)
@@ -206,24 +226,10 @@ try_add_link_option_if(strip-all $<CONFIG:Release,MinSizeRel> LINKER:-s)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG FALSE)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 
-if(NOT DEFINED ar_thin_flag)
-  execute_process(COMMAND sh -c "${CMAKE_AR} --help | grep -- --thin"
-                  RESULT_VARIABLE ar_has_thin)
-  if(ar_has_thin EQUAL 0)
-    set(ar_thin_flag
-        "--thin"
-        CACHE INTERNAL "")
-  else()
-    set(ar_thin_flag
-        ""
-        CACHE INTERNAL "")
-  endif()
-endif()
-
-set(CMAKE_C_CREATE_STATIC_LIBRARY
-    "<CMAKE_AR> rcs ${ar_thin_flag} <TARGET> <OBJECTS>")
-set(CMAKE_C_CREATE_STATIC_LIBRARY_IPO
-    "\"${CMAKE_C_COMPILER_AR}\" rcs ${ar_thin_flag} <TARGET> <OBJECTS>")
+# Additional optimization flags that GCC disables due to compile time cost
+try_add_cflag_if(fipa-pta $<NOT:$<CONFIG:Debug>> -fipa-pta)
+try_add_cflag_if(fdevirtualize-at-ltrans $<NOT:$<CONFIG:Debug>>
+                 -fdevirtualize-at-ltrans)
 
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
@@ -282,8 +288,8 @@ check_c_source_compiles(
 # Add components
 #
 
-add_subdirectory(${ggl_sdk_SOURCE_DIR} ggl-sdk)
-target_include_directories(ggl-sdk INTERFACE ${ggl_sdk_SOURCE_DIR}/priv_include)
+add_subdirectory(${gg_sdk_SOURCE_DIR} gg-sdk)
+target_include_directories(gg-sdk INTERFACE ${gg_sdk_SOURCE_DIR}/priv_include)
 
 # Common setup for a GGL module
 function(ggl_init_module name)
@@ -310,7 +316,7 @@ function(ggl_init_module name)
   # src/dummy.c
   if(NOT SRCS_LEN EQUAL 0)
     add_library(${name} STATIC ${SRCS})
-    target_compile_definitions(${name} PRIVATE "GGL_MODULE=(\"${name}\")")
+    target_compile_definitions(${name} PRIVATE "GG_MODULE=(\"${name}\")")
     target_include_directories(${name} PUBLIC ${COMP_ARG_INCDIRS})
     target_link_libraries(${name} PRIVATE ${COMP_ARG_LIBS})
   endif()
@@ -339,7 +345,7 @@ function(ggl_init_module name)
     get_filename_component(bin_name ${bin} NAME_WLE)
     add_executable(${bin_name}-bin ${bin})
     target_compile_definitions(${bin_name}-bin
-                               PRIVATE "GGL_MODULE=(\"${name}\")")
+                               PRIVATE "GG_MODULE=(\"${name}\")")
     if(NOT SRCS_LEN EQUAL 0)
       target_link_libraries(${bin_name}-bin PRIVATE ${name})
     endif()

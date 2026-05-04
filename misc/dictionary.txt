@@ -33,6 +33,7 @@ EOK
 epoll
 EPOLLIN
 esac
+esys
 evbuffer
 eventfd
 evhttp
@@ -40,6 +41,8 @@ evkeyvalq
 execvp
 execvpe
 FDNAMES
+fdopendir
+FIXEDTPM
 FOWNER
 Fssd
 fstrict
@@ -68,11 +71,13 @@ HEALTHD
 htobe
 INET
 iotcored
+iotcoreddeploy
 iotcoredfleet
 iwyu
 journalctl
 keyid
 ktls
+lib
 libcgroup
 libsystemd
 libtss
@@ -112,6 +117,7 @@ pyproject
 rbio
 Renesas
 respfd
+riscv
 rlimits
 rodata
 rootca
@@ -122,6 +128,7 @@ SERVUNAVAIL
 Setenv
 sigv4
 Skipif
+softhsm
 ssssssouso
 statusd
 stdenv
@@ -132,12 +139,18 @@ sysv
 tabrmd
 tcti
 tesd
+tesddeploy
 tlog
 tmpfiles
+TPMA
+TPMI
+TPML
 tpmrm
+TPMS
 uefi
 unacked
 unarchived
+unprovisioned
 unrefp
 unsuback
 uriparser

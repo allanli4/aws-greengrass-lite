@@ -2,15 +2,15 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "recipe-runner.h"
 #include "runner.h"
-#include <ggl/error.h>
+#include <gg/error.h>
+#include <recipe-runner.h>
 
-GglError run_recipe_runner(RecipeRunnerArgs *args) {
-    GglError ret = runner(args);
-    if (ret != GGL_ERR_OK) {
+GgError run_recipe_runner(RecipeRunnerArgs *args) {
+    GgError ret = runner(args);
+    if (ret != GG_ERR_OK) {
         return ret;
     }
 
-    return GGL_ERR_OK;
+    return GG_ERR_OK;
 }

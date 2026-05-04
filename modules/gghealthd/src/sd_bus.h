@@ -1,8 +1,9 @@
 #ifndef GGHEALTHD_SD_BUS_H
 #define GGHEALTHD_SD_BUS_H
 
-#include <ggl/buffer.h>
-#include <ggl/error.h>
+#include <gg/attr.h>
+#include <gg/error.h>
+#include <gg/types.h>
 #include <ggl/nucleus/constants.h>
 #include <systemd/sd-bus.h>
 
@@ -24,22 +25,29 @@
 #define SERVICE_INTERFACE "org.freedesktop.systemd1.Service"
 #define UNIT_INTERFACE "org.freedesktop.systemd1.Unit"
 
-GglError translate_dbus_call_error(int error);
+GgError translate_dbus_call_error(int error);
 
-GglError get_unit_path(
+GgError get_unit_path(
     sd_bus *bus,
     const char *qualified_name,
     sd_bus_message **reply,
     const char **unit_path
 );
 
-GglError open_bus(sd_bus **bus);
+// equivalent to systemd reset-failed <service-name>
+NONNULL(2)
+void reset_restart_counters(sd_bus *bus, const char *qualified_name);
 
-GglError get_service_name(GglBuffer component_name, GglBuffer *qualified_name);
+GgError open_bus(sd_bus **bus);
 
-GglError get_lifecycle_state(
-    sd_bus *bus, const char *unit_path, GglBuffer *state
+GgError get_service_name(GgBuffer component_name, GgBuffer *qualified_name);
+
+GgError get_lifecycle_state(
+    sd_bus *bus, const char *unit_path, GgBuffer *state
 );
+
+NONNULL(2)
+GgError restart_component(sd_bus *bus, const char *qualified_name);
 
 void *event_loop_thread(void *ctx);
 

@@ -1,3 +1,92 @@
+# Release Notes v2.5.0
+
+- Use of AWS Greengrass Nucleus Lite with HSMs using PKCS#11 is now supported.
+  PKCS#11 backed key/cert handles can now be used and will be passed to OpenSSL
+  to allow handling by system configured OpenSSL Providers.
+- TPM backed keys can now be used with fleet provisioning.
+- Fixed a regression in fleet provisioning introduced in v2.4.0 as part of
+  changing the underlying protocol version from MQTT v3 to v5.
+- Fixed a regression introduced in v2.4.0 where artifact permissions declared by
+  recipes were now respected, but the artifacts were not owned by the component
+  user.
+
+# Release Notes v2.4.0
+
+- Increased backoff interval for MQTT connections
+- FleetStatusService now supports the periodicStatusPublishIntervalSeconds
+  configuration
+- aws.greengrass.Cli is now ignored during dependency resolution to support
+  components that require it for Greengrass nucleus
+- Local deployments now support the --group-name option to override a thing
+  group deployment
+- Local deployments now support the --remove-component option to remove a
+  locally deployed component
+- Local deployments no longer block on certain system configurations being set
+  to support devices in an unprovisioned state
+- Removed ggdeploymentd dependencies on services that require a network
+  connection
+- ggdeploymentd service now waits until it is ready to receive deployments
+  before being marked as active
+- Fixed an issue where MQTT messages could be delayed until the next keepalive
+  interval
+- Fixed an issue where iotcored may enter deadlock and be unable to reconnect
+- Fixed SSL verification failures when using an HTTP proxy with SSL
+  bump/interception
+- Improved connection reliability
+- Now applies artifact permissions from recipe
+
+# Release Notes v2.3.3
+
+This release fixes some bugs and has minor improvements:
+
+- Fixes leak of fds when creating components during deployment
+- Fixes issue where deployment job status report may be rejected, resulting in
+  current deployment status not being reported
+- Allows component install phases to retry up to 3 times before failing
+  deployment instead of after first fail
+- Increases socket timeouts to be more generous
+
+# Release Notes v2.3.2
+
+This release updates the version file for correct reporting.
+
+# Release Notes v2.3.1
+
+This release includes the following fixes:
+
+- GG will not attempt to update deployment state for canceled jobs
+- Ensure DIR from fdopendir is closed
+- Fleet provisioning will now trigger certificate file overwrite on each run
+- Other minor bug fixes
+
+# Release Notes v2.3.0
+
+This release includes support for using TPM 2.0 for IoT Core MQTT authorization
+and the `RestartComponent` IPC command.
+
+## Breaking Changes
+
+`GetConfiguration` has been updated to match the Greengrass nucleus runtime
+behavior. With this release, the nucleus lite runtime will return the same
+results as nucleus when used with the AWS IoT Device SDKs. Users of
+aws-greengrass-sdk-lite will need to update to version 0.3.0 of the SDK.
+
+Recipe manifests must now have the platform runtime set to `aws_nucleus_lite` or
+`*`. A missing platform runtime is now correctly handled as classic only.
+
+## New with this release
+
+- Local deployments no longer require internet access.
+- The minimum TLS protocol version is now set to 1.2.
+- TPM 2.0 persistent handles in the `privateKeyPath` config are supported. For
+  instructions, see the documentation here:
+  https://github.com/aws-greengrass/aws-greengrass-lite/blob/main/docs/TPM_SUPPORT.md
+- Updated the sample fleet provisioning template.
+- The sample APT packages now support more operating systems: Ubuntu 22.04,
+  Ubuntu 24.04, Debian 12, and Debian 13.
+- Moved the fleet provisioning credentials storage path to
+  `/var/lib/greengrass/credentials`.
+
 # Release Notes v2.2.2
 
 This release fixes the folowing bugs:

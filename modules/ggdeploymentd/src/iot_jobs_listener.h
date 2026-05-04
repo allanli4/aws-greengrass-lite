@@ -5,17 +5,21 @@
 #ifndef GGDEPLOYMENTD_IOT_JOBS_LISTENER_H
 #define GGDEPLOYMENTD_IOT_JOBS_LISTENER_H
 
-#include <ggl/buffer.h>
-#include <ggl/error.h>
-#include <stdint.h>
+#include <gg/error.h>
+#include <gg/types.h>
 
 void *job_listener_thread(void *ctx);
 
-GglError update_current_jobs_deployment(
-    GglBuffer deployment_id, GglBuffer status
+GgError update_current_jobs_deployment(GgBuffer deployment_id, GgBuffer status);
+
+/// Publish an IoT Jobs status update for the current deployment via the given
+/// iotcored socket.
+GgError update_current_jobs_deployment_to(
+    GgBuffer deployment_id, GgBuffer status, GgBuffer socket_name
 );
-GglError set_jobs_deployment_for_bootstrap(
-    GglBuffer job_id, GglBuffer deployment_id, int64_t version
+
+GgError set_jobs_deployment_for_bootstrap(
+    GgBuffer job_id, GgBuffer deployment_id
 );
 
 #endif

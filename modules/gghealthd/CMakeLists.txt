@@ -4,9 +4,9 @@
 
 ggl_init_module(
   gghealthd
-  LIBS ggl-sdk
+  LIBS gg-sdk
        ggl-common
-       ggl-exec
+       ggl-process
        ggl-constants
        core-bus
        ggl-socket-server

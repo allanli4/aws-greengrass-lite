@@ -5,8 +5,14 @@
 #ifndef TESD_H
 #define TESD_H
 
-#include <ggl/error.h>
+#include <gg/error.h>
 
-GglError run_tesd(void);
+typedef struct {
+    char *interface_name;
+    char *cred_endpoint;
+    char *role_alias;
+} TesdArgs;
+
+GgError run_tesd(TesdArgs *args);
 
 #endif

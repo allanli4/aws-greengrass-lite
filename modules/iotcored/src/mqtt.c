@@ -3,26 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mqtt.h"
-#include "ggl/error.h"
-#include "ggl/log.h"
-#include "ggl/utils.h"
-#include "iotcored.h"
 #include "subscription_dispatch.h"
 #include "tls.h"
 #include <assert.h>
 #include <core_mqtt.h>
 #include <core_mqtt_config.h>
 #include <core_mqtt_serializer.h>
-#include <ggl/backoff.h>
-#include <ggl/object.h>
+#include <errno.h>
+#include <gg/backoff.h>
+#include <gg/error.h>
+#include <gg/file.h> // IWYU pragma: keep (TODO: remove after file.h refactor)
+#include <gg/log.h>
+#include <gg/object.h>
+#include <iotcored.h>
+#include <poll.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/time.h>
+#include <sys/timerfd.h>
 #include <sys/types.h>
+#include <time.h>
 #include <transport_interface.h>
-#include <stdatomic.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <stdnoreturn.h>
 
 #ifndef IOTCORED_KEEP_ALIVE_PERIOD
@@ -44,10 +50,13 @@
 #define IOTCORED_MQTT_MAX_PUBLISH_RECORDS 10
 
 static uint32_t time_ms(void);
-static void event_callback(
+static bool event_callback(
     MQTTContext_t *ctx,
     MQTTPacketInfo_t *packet_info,
-    MQTTDeserializedInfo_t *deserialized_info
+    MQTTDeserializedInfo_t *deserialized_info,
+    MQTTSuccessFailReasonCode_t *reason_code,
+    MQTTPropBuilder_t *send_props,
+    MQTTPropBuilder_t *get_props
 );
 
 struct NetworkContext {
@@ -55,15 +64,17 @@ struct NetworkContext {
 };
 
 typedef struct {
-    uint16_t packet_id;
+    uint32_t handle;
     uint8_t *serialized_packet;
     size_t serialized_packet_len;
 } StoredPublish;
 
 static pthread_t recv_thread;
-static pthread_t keepalive_thread;
 
-static atomic_bool ping_pending;
+static int write_event_fd = -1;
+static int reconnect_event_fd = -1;
+
+static bool ping_pending;
 
 static NetworkContext_t net_ctx;
 
@@ -106,13 +117,13 @@ static uint32_t time_ms(void) {
 static uint8_t *mqtt_pub_alloc(size_t length) {
     size_t i = 0;
     for (; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS; i++) {
-        if (unacked_publishes[i].packet_id == 0) {
+        if (unacked_publishes[i].handle == 0) {
             break;
         }
     }
 
     if (i == IOTCORED_MQTT_MAX_PUBLISH_RECORDS) {
-        GGL_LOGE("Not enough spots in record array to store one more packet.");
+        GG_LOGE("Not enough spots in record array to store one more packet.");
         return NULL;
     }
 
@@ -133,7 +144,7 @@ static uint8_t *mqtt_pub_alloc(size_t length) {
         - bytes_filled;
 
     if (space_left < length) {
-        GGL_LOGE("Not enough space in buffer to store one more packet.");
+        GG_LOGE("Not enough space in buffer to store one more packet.");
         return NULL;
     }
 
@@ -143,7 +154,7 @@ static uint8_t *mqtt_pub_alloc(size_t length) {
 static void mqtt_pub_free(const uint8_t *ptr) {
     size_t i = 0;
     for (; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS; i++) {
-        if ((unacked_publishes[i].packet_id != 0)
+        if ((unacked_publishes[i].handle != 0)
             && (unacked_publishes[i].serialized_packet == ptr)) {
             break;
         }
@@ -151,7 +162,7 @@ static void mqtt_pub_free(const uint8_t *ptr) {
 
     // If we cannot find the entry. Log the error and exit.
     if (i == IOTCORED_MQTT_MAX_PUBLISH_RECORDS) {
-        GGL_LOGE("Cannot find a matching publish record entry to free.");
+        GG_LOGE("Cannot find a matching publish record entry to free.");
         return;
     }
 
@@ -175,11 +186,11 @@ static void mqtt_pub_free(const uint8_t *ptr) {
 
         // Compact the records.
         for (; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS - 1; i++) {
-            if (unacked_publishes[i + 1].packet_id == 0) {
+            if (unacked_publishes[i + 1].handle == 0) {
                 break;
             }
 
-            unacked_publishes[i].packet_id = unacked_publishes[i + 1].packet_id;
+            unacked_publishes[i].handle = unacked_publishes[i + 1].handle;
             unacked_publishes[i].serialized_packet
                 = unacked_publishes[i + 1].serialized_packet - byte_offset;
             unacked_publishes[i].serialized_packet_len
@@ -188,7 +199,7 @@ static void mqtt_pub_free(const uint8_t *ptr) {
     }
 
     // Clear the last record.
-    unacked_publishes[i].packet_id = 0;
+    unacked_publishes[i].handle = 0;
     unacked_publishes[i].serialized_packet = NULL;
     unacked_publishes[i].serialized_packet_len = 0;
 
@@ -202,22 +213,26 @@ static void mqtt_pub_free(const uint8_t *ptr) {
 }
 
 static bool mqtt_store_packet(
-    MQTTContext_t *context, uint16_t packet_id, MQTTVec_t *mqtt_vec
+    MQTTContext_t *context, uint32_t handle, MQTTVec_t *mqtt_vec
 ) {
     (void) context;
     size_t i;
     for (i = 0; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS; i++) {
-        if (unacked_publishes[i].packet_id == 0) {
+        if (unacked_publishes[i].handle == 0) {
             break;
         }
     }
 
     if (i == IOTCORED_MQTT_MAX_PUBLISH_RECORDS) {
-        GGL_LOGE("No space left in array to store additional record.");
+        GG_LOGE("No space left in array to store additional record.");
         return false;
     }
 
-    size_t memory_needed = MQTT_GetBytesInMQTTVec(mqtt_vec);
+    size_t memory_needed = 0;
+    if (MQTT_GetBytesInMQTTVec(mqtt_vec, &memory_needed) != MQTTSuccess) {
+        GG_LOGE("Failed to get bytes in MQTTVec.");
+        return false;
+    }
 
     uint8_t *allocated_mem = mqtt_pub_alloc(memory_needed);
     if (allocated_mem == NULL) {
@@ -226,69 +241,72 @@ static bool mqtt_store_packet(
 
     MQTT_SerializeMQTTVec(allocated_mem, mqtt_vec);
 
-    unacked_publishes[i].packet_id = packet_id;
+    unacked_publishes[i].handle = handle;
     unacked_publishes[i].serialized_packet = allocated_mem;
     unacked_publishes[i].serialized_packet_len = memory_needed;
 
-    GGL_LOGD("Stored MQTT publish (ID: %d).", packet_id);
+    GG_LOGD("Stored MQTT publish (handle: %u).", handle);
     return true;
 }
 
 static bool mqtt_retrieve_packet(
     MQTTContext_t *context,
-    uint16_t packet_id,
+    uint32_t handle,
     uint8_t **serialized_mqtt_vec,
     size_t *serialized_mqtt_vec_len
 ) {
     (void) context;
 
     for (size_t i = 0; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS; i++) {
-        if (unacked_publishes[i].packet_id == packet_id) {
+        if (unacked_publishes[i].handle == handle) {
             *serialized_mqtt_vec = unacked_publishes[i].serialized_packet;
             *serialized_mqtt_vec_len
                 = unacked_publishes[i].serialized_packet_len;
 
-            GGL_LOGD("Retrived MQTT publish (ID: %d).", packet_id);
+            GG_LOGD("Retrieved MQTT publish (handle: %u).", handle);
             return true;
         }
     }
 
-    GGL_LOGE("No packet with ID %d present.", packet_id);
+    GG_LOGE("No packet with handle %u present.", handle);
 
     return false;
 }
 
-static void mqtt_clear_packet(MQTTContext_t *context, uint16_t packet_id) {
+static void mqtt_clear_packet(MQTTContext_t *context, uint32_t handle) {
     (void) context;
 
     for (size_t i = 0; i < IOTCORED_MQTT_MAX_PUBLISH_RECORDS; i++) {
-        if (unacked_publishes[i].packet_id == packet_id) {
+        if (unacked_publishes[i].handle == handle) {
             mqtt_pub_free(unacked_publishes[i].serialized_packet);
-            GGL_LOGD("Cleared MQTT publish (ID: %d).", packet_id);
+            GG_LOGD("Cleared MQTT publish (handle: %u).", handle);
             return;
         }
     }
 
-    GGL_LOGE("Cannot find the packet ID to clear.");
+    GG_LOGE("Cannot find the handle to clear.");
 }
 
 // Establish TLS and MQTT connection to the AWS IoT broker.
-static GglError establish_connection(void *ctx) {
+static GgError establish_connection(void *ctx) {
     (void) ctx;
     MQTTStatus_t mqtt_ret;
 
-    GGL_LOGD("Trying to establish connection to IoT core.");
+    GG_LOGD(
+        "Trying to establish connection to IoT core at %s.",
+        iot_cored_args->endpoint
+    );
 
-    GglError ret = iotcored_tls_connect(iot_cored_args, &net_ctx.tls_ctx);
+    GgError ret = iotcored_tls_connect(iot_cored_args, &net_ctx.tls_ctx);
     if (ret != 0) {
-        GGL_LOGE("Failed to create TLS connection.");
+        GG_LOGE("Failed to create TLS connection.");
         return ret;
     }
 
     size_t id_len = strlen(iot_cored_args->id);
     if (id_len > UINT16_MAX) {
-        GGL_LOGE("Client ID too long.");
-        return GGL_ERR_CONFIG;
+        GG_LOGE("Client ID too long.");
+        return GG_ERR_CONFIG;
     }
 
     MQTTConnectInfo_t conn_info = {
@@ -304,85 +322,151 @@ static GglError establish_connection(void *ctx) {
         &conn_info,
         NULL,
         IOTCORED_CONNACK_TIMEOUT * 1000,
-        &server_session
+        &server_session,
+        NULL,
+        NULL
     );
 
     if (mqtt_ret != MQTTSuccess) {
-        GGL_LOGE("Connection failed: %s", MQTT_Status_strerror(mqtt_ret));
+        GG_LOGE("Connection failed: %s", MQTT_Status_strerror(mqtt_ret));
 
         iotcored_tls_cleanup(net_ctx.tls_ctx);
-        return GGL_ERR_FAILURE;
+        return GG_ERR_FAILURE;
     }
 
-    atomic_store_explicit(&ping_pending, false, memory_order_release);
+    ping_pending = false;
 
-    GGL_LOGD("Connected to IoT core.");
-    return GGL_ERR_OK;
+    GG_LOGI("Connected to IoT core at %s.", iot_cored_args->endpoint);
+    return GG_ERR_OK;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 noreturn static void *mqtt_recv_thread_fn(void *arg) {
+    MQTTContext_t *ctx = arg;
+
+    int keepalive_tfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    if (keepalive_tfd < 0) {
+        GG_LOGE("Failed to create timerfd: %m.");
+        _Exit(1);
+    }
+
     // coverity[infinite_loop]
     while (true) {
-        // Connect to IoT core with backoff between 10ms->10s.
-        ggl_backoff_indefinite(10, 10000, establish_connection, NULL);
+        // Connect to IoT core with backoff between 5s->5m.
+        (void) gg_backoff(5000, 300000, 0, establish_connection, NULL);
 
         // Send status update to indicate mqtt (re)connection.
-        iotcored_mqtt_status_update_send(ggl_obj_bool(true));
+        iotcored_mqtt_status_update_send(gg_obj_bool(true));
 
         iotcored_re_register_all_subs();
 
-        MQTTStatus_t mqtt_ret;
-        MQTTContext_t *ctx = arg;
-        do {
-            mqtt_ret = MQTT_ReceiveLoop(ctx);
-        } while ((mqtt_ret == MQTTSuccess) || (mqtt_ret == MQTTNeedMoreBytes));
+        struct itimerspec ts = {
+            .it_interval = { .tv_sec = IOTCORED_KEEP_ALIVE_PERIOD },
+            .it_value = { .tv_sec = IOTCORED_KEEP_ALIVE_PERIOD },
+        };
+        timerfd_settime(keepalive_tfd, 0, &ts, NULL);
 
-        GGL_LOGE("Error in receive loop, closing connection.");
+        int sock_fd = iotcored_tls_get_fd(net_ctx.tls_ctx);
 
-        (void) MQTT_Disconnect(ctx);
+        // Drain any stale signals from previous connection.
+        if (write_event_fd >= 0) {
+            // Best-effort drain
+            uint64_t val;
+            while ((read(write_event_fd, &val, sizeof(val)) < 0)
+                   && (errno == EINTR)) { }
+        }
+        if (reconnect_event_fd >= 0) {
+            uint64_t val;
+            while ((read(reconnect_event_fd, &val, sizeof(val)) < 0)
+                   && (errno == EINTR)) { }
+        }
+
+        struct pollfd fds[4] = {
+            { .fd = sock_fd, .events = POLLIN },
+            { .fd = keepalive_tfd, .events = POLLIN },
+            { .fd = write_event_fd, .events = POLLIN },
+            { .fd = reconnect_event_fd, .events = POLLIN },
+        };
+
+        while (true) {
+            if (!iotcored_tls_read_ready(net_ctx.tls_ctx)) {
+                int ret;
+                do {
+                    // 10s timeout is a failsafe against missed wakeups.
+                    // Set to -1 when debugging to expose poll notification
+                    // bugs.
+                    ret = poll(fds, 4, 10000);
+                } while ((ret < 0) && (errno == EINTR));
+                if (ret < 0) {
+                    GG_LOGE("poll failed: %m.");
+                    break;
+                }
+            }
+
+            if (fds[1].revents & POLLIN) {
+                // Keepalive timer fired.
+                // Consume timer expiration count; error is non-fatal.
+                uint64_t expirations;
+                while ((read(keepalive_tfd, &expirations, sizeof(expirations))
+                        < 0)
+                       && (errno == EINTR)) { }
+
+                if (ping_pending) {
+                    GG_LOGE(
+                        "Server did not respond to ping within Keep Alive period."
+                    );
+                    break;
+                }
+                GG_LOGD("Sending pingreq.");
+                ping_pending = true;
+                MQTTStatus_t mqtt_ret = MQTT_Ping(ctx);
+                if (mqtt_ret != MQTTSuccess) {
+                    GG_LOGE("Sending pingreq failed.");
+                    break;
+                }
+            }
+
+            if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                GG_LOGE("Socket error detected.");
+                break;
+            }
+
+            // Drain the write-notification eventfd.
+            if (fds[2].revents & POLLIN) {
+                uint64_t val;
+                while ((read(write_event_fd, &val, sizeof(val)) < 0)
+                       && (errno == EINTR)) { }
+            }
+
+            // Reconnect requested via iotcored_mqtt_disconnect().
+            if (fds[3].revents & POLLIN) {
+                GG_LOGI(
+                    "Reconnect requested, disconnecting from current endpoint."
+                );
+                break;
+            }
+
+            MQTTStatus_t mqtt_ret;
+            do {
+                mqtt_ret = MQTT_ReceiveLoop(ctx);
+            } while (mqtt_ret == MQTTSuccess
+                     && (iotcored_tls_read_ready(net_ctx.tls_ctx)
+                         || ctx->index > 0));
+
+            if ((mqtt_ret != MQTTSuccess) && (mqtt_ret != MQTTNeedMoreBytes)) {
+                GG_LOGE("Error in receive loop, closing connection.");
+                break;
+            }
+        }
+
+        (void) MQTT_Disconnect(ctx, NULL, NULL);
         iotcored_tls_cleanup(ctx->transportInterface.pNetworkContext->tls_ctx);
 
         // Send status update to indicate mqtt disconnection.
-        iotcored_mqtt_status_update_send(ggl_obj_bool(false));
-    }
-}
-
-noreturn static void *mqtt_keepalive_thread_fn(void *arg) {
-    MQTTContext_t *ctx = arg;
-
-    while (true) {
-        GglError err;
-        do {
-            err = ggl_sleep(IOTCORED_KEEP_ALIVE_PERIOD);
-        } while (MQTT_CheckConnectStatus(ctx) == MQTTStatusNotConnected);
-
-        if (err != GGL_ERR_OK) {
-            GGL_LOGE("Failed a call to ggl_sleep.");
-            break;
-        }
-
-        if (atomic_load_explicit(&ping_pending, memory_order_acquire)) {
-            GGL_LOGE("Server did not respond to ping within Keep Alive period."
-            );
-            // We do not care about the value returned by the following call.
-            (void) MQTT_Disconnect(ctx);
-        } else {
-            GGL_LOGD("Sending pingreq.");
-            atomic_store_explicit(&ping_pending, true, memory_order_release);
-            MQTTStatus_t mqtt_ret = MQTT_Ping(ctx);
-
-            if (mqtt_ret != MQTTSuccess) {
-                GGL_LOGE("Sending pingreq failed.");
-
-                // We do not care about the value returned by the following
-                // call.
-                (void) MQTT_Disconnect(ctx);
-            }
-        }
+        iotcored_mqtt_status_update_send(gg_obj_bool(false));
     }
 
-    GGL_LOGE("Exiting the MQTT Keep Alive thread.");
-
+    GG_LOGE("Exiting the MQTT thread.");
     pthread_exit(NULL);
 }
 
@@ -391,11 +475,11 @@ static int32_t transport_recv(
 ) {
     size_t bytes = bytes_to_recv < INT32_MAX ? bytes_to_recv : INT32_MAX;
 
-    GglBuffer buf = { .data = buffer, .len = bytes };
+    GgBuffer buf = { .data = buffer, .len = bytes };
 
-    GglError ret = iotcored_tls_read(network_context->tls_ctx, &buf);
+    GgError ret = iotcored_tls_read(network_context->tls_ctx, &buf);
 
-    return (ret == GGL_ERR_OK) ? (int32_t) buf.len : -1;
+    return (ret == GG_ERR_OK) ? (int32_t) buf.len : -1;
 }
 
 static int32_t transport_send(
@@ -403,15 +487,25 @@ static int32_t transport_send(
 ) {
     size_t bytes = bytes_to_send < INT32_MAX ? bytes_to_send : INT32_MAX;
 
-    GglError ret = iotcored_tls_write(
+    bool has_pending = false;
+    GgError ret = iotcored_tls_write(
         network_context->tls_ctx,
-        (GglBuffer) { .data = (void *) buffer, .len = bytes }
+        (GgBuffer) { .data = (void *) buffer, .len = bytes },
+        &has_pending
     );
 
-    return (ret == GGL_ERR_OK) ? (int32_t) bytes : -1;
+    // Best-effort wakeup; failure means recv thread will catch it
+    // on next poll timeout.
+    if (has_pending) {
+        uint64_t val = 1;
+        while ((write(write_event_fd, &val, sizeof(val)) < 0)
+               && (errno == EINTR)) { }
+    }
+
+    return (ret == GG_ERR_OK) ? (int32_t) bytes : -1;
 }
 
-GglError iotcored_mqtt_connect(const IotcoredArgs *args) {
+GgError iotcored_mqtt_connect(const IotcoredArgs *args) {
     TransportInterface_t transport = {
         .pNetworkContext = &net_ctx,
         .recv = transport_recv,
@@ -433,7 +527,9 @@ GglError iotcored_mqtt_connect(const IotcoredArgs *args) {
         outgoing_publish_records,
         sizeof(outgoing_publish_records) / sizeof(*outgoing_publish_records),
         &incoming_publish_record,
-        1
+        1,
+        NULL,
+        0
     );
     assert(mqtt_ret == MQTTSuccess);
 
@@ -445,26 +541,19 @@ GglError iotcored_mqtt_connect(const IotcoredArgs *args) {
     // Store a global variable copy.
     iot_cored_args = args;
 
+    write_event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    reconnect_event_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+
     int thread_ret
         = pthread_create(&recv_thread, NULL, mqtt_recv_thread_fn, &mqtt_ctx);
     if (thread_ret != 0) {
-        GGL_LOGE("Could not create the MQTT receive thread: %d.", thread_ret);
-        return GGL_ERR_FATAL;
+        GG_LOGE("Could not create the MQTT receive thread: %d.", thread_ret);
+        return GG_ERR_FATAL;
     }
 
-    thread_ret = pthread_create(
-        &keepalive_thread, NULL, mqtt_keepalive_thread_fn, &mqtt_ctx
-    );
-    if (thread_ret != 0) {
-        GGL_LOGE(
-            "Could not create the MQTT keep-alive thread: %d.", thread_ret
-        );
-        return GGL_ERR_FATAL;
-    }
+    GG_LOGI("MQTT client initialized.");
 
-    GGL_LOGI("Successfully connected.");
-
-    return GGL_ERR_OK;
+    return GG_ERR_OK;
 }
 
 bool iotcored_mqtt_connection_status(void) {
@@ -475,7 +564,15 @@ bool iotcored_mqtt_connection_status(void) {
     return connected;
 }
 
-GglError iotcored_mqtt_publish(const IotcoredMsg *msg, uint8_t qos) {
+void iotcored_mqtt_disconnect(void) {
+    if (reconnect_event_fd >= 0) {
+        uint64_t val = 1;
+        while ((write(reconnect_event_fd, &val, sizeof(val)) < 0)
+               && (errno == EINTR)) { }
+    }
+}
+
+GgError iotcored_mqtt_publish(const IotcoredMsg *msg, uint8_t qos) {
     assert(msg != NULL);
     assert(qos <= 2);
 
@@ -488,31 +585,32 @@ GglError iotcored_mqtt_publish(const IotcoredMsg *msg, uint8_t qos) {
             .payloadLength = msg->payload.len,
             .qos = (MQTTQoS_t) qos,
         },
-        MQTT_GetPacketId(&mqtt_ctx)
+        MQTT_GetPacketId(&mqtt_ctx),
+        NULL
     );
 
     if (result != MQTTSuccess) {
-        GGL_LOGE(
+        GG_LOGE(
             "%s to %.*s failed: %s",
             "Publish",
             (int) (uint16_t) msg->topic.len,
             msg->topic.data,
             MQTT_Status_strerror(result)
         );
-        return GGL_ERR_FAILURE;
+        return GG_ERR_FAILURE;
     }
 
-    GGL_LOGD(
+    GG_LOGD(
         "Publish sent on: %.*s",
         (int) (uint16_t) msg->topic.len,
         msg->topic.data
     );
 
-    return GGL_ERR_OK;
+    return GG_ERR_OK;
 }
 
-GglError iotcored_mqtt_subscribe(
-    GglBuffer *topic_filters, size_t count, uint8_t qos
+GgError iotcored_mqtt_subscribe(
+    GgBuffer *topic_filters, size_t count, uint8_t qos
 ) {
     assert(count > 0);
     assert(count < GGL_MQTT_MAX_SUBSCRIBE_FILTERS);
@@ -529,30 +627,30 @@ GglError iotcored_mqtt_subscribe(
     }
 
     MQTTStatus_t result = MQTT_Subscribe(
-        &mqtt_ctx, sub_infos, count, MQTT_GetPacketId(&mqtt_ctx)
+        &mqtt_ctx, sub_infos, count, MQTT_GetPacketId(&mqtt_ctx), NULL
     );
 
     if (result != MQTTSuccess) {
-        GGL_LOGE(
+        GG_LOGE(
             "%s to %.*s failed: %s",
             "Subscribe",
             (int) (uint16_t) topic_filters[0].len,
             topic_filters[0].data,
             MQTT_Status_strerror(result)
         );
-        return GGL_ERR_FAILURE;
+        return GG_ERR_FAILURE;
     }
 
-    GGL_LOGD(
+    GG_LOGD(
         "Subscribe sent for: %.*s",
         (int) (uint16_t) topic_filters[0].len,
         topic_filters[0].data
     );
 
-    return GGL_ERR_OK;
+    return GG_ERR_OK;
 }
 
-GglError iotcored_mqtt_unsubscribe(GglBuffer *topic_filters, size_t count) {
+GgError iotcored_mqtt_unsubscribe(GgBuffer *topic_filters, size_t count) {
     assert(count > 0);
     assert(count < GGL_MQTT_MAX_SUBSCRIBE_FILTERS);
 
@@ -567,30 +665,30 @@ GglError iotcored_mqtt_unsubscribe(GglBuffer *topic_filters, size_t count) {
     }
 
     MQTTStatus_t result = MQTT_Unsubscribe(
-        &mqtt_ctx, sub_infos, count, MQTT_GetPacketId(&mqtt_ctx)
+        &mqtt_ctx, sub_infos, count, MQTT_GetPacketId(&mqtt_ctx), NULL
     );
 
     if (result != MQTTSuccess) {
-        GGL_LOGE(
+        GG_LOGE(
             "%s to %.*s failed: %s",
             "Unsubscribe",
             (int) (uint16_t) topic_filters[0].len,
             topic_filters[0].data,
             MQTT_Status_strerror(result)
         );
-        return GGL_ERR_FAILURE;
+        return GG_ERR_FAILURE;
     }
 
-    GGL_LOGD(
+    GG_LOGD(
         "Unsubscribe sent for: %.*s",
         (int) (uint16_t) topic_filters[0].len,
         topic_filters[0].data
     );
 
-    return GGL_ERR_OK;
+    return GG_ERR_OK;
 }
 
-bool iotcored_mqtt_topic_filter_match(GglBuffer topic_filter, GglBuffer topic) {
+bool iotcored_mqtt_topic_filter_match(GgBuffer topic_filter, GgBuffer topic) {
     bool matches = false;
     MQTTStatus_t result = MQTT_MatchTopic(
         (char *) topic.data,
@@ -602,22 +700,33 @@ bool iotcored_mqtt_topic_filter_match(GglBuffer topic_filter, GglBuffer topic) {
     return (result == MQTTSuccess) && matches;
 }
 
-static void event_callback(
+static bool event_callback(
     MQTTContext_t *ctx,
     MQTTPacketInfo_t *packet_info,
-    MQTTDeserializedInfo_t *deserialized_info
+    MQTTDeserializedInfo_t *deserialized_info,
+    // NOLINTNEXTLINE(readability-non-const-parameter)
+    MQTTSuccessFailReasonCode_t *reason_code,
+    MQTTPropBuilder_t *send_props,
+    MQTTPropBuilder_t *get_props
 ) {
     assert(ctx != NULL);
     assert(packet_info != NULL);
     assert(deserialized_info != NULL);
 
     (void) ctx;
+    (void) reason_code;
+    (void) send_props;
+    (void) get_props;
+
+    /* Greengrass connects to IoT Core as a client only. IoT Core does not
+     * initiate QoS 2 publishes to clients, so PUBREC/PUBREL/PUBCOMP for
+     * incoming publishes are not expected here. */
 
     if ((packet_info->type & 0xF0U) == MQTT_PACKET_TYPE_PUBLISH) {
         assert(deserialized_info->pPublishInfo != NULL);
         MQTTPublishInfo_t *publish = deserialized_info->pPublishInfo;
 
-        GGL_LOGD(
+        GG_LOGD(
             "Received publish id %u on topic %.*s.",
             deserialized_info->packetIdentifier,
             (int) publish->topicNameLength,
@@ -634,32 +743,39 @@ static void event_callback(
         // Handle other packets.
         switch (packet_info->type) {
         case MQTT_PACKET_TYPE_PUBACK:
-            GGL_LOGD(
+            GG_LOGD(
                 "Received %s id %u.",
                 "puback",
                 deserialized_info->packetIdentifier
             );
             break;
         case MQTT_PACKET_TYPE_SUBACK:
-            GGL_LOGD(
+            GG_LOGD(
                 "Received %s id %u.",
                 "suback",
                 deserialized_info->packetIdentifier
             );
             break;
         case MQTT_PACKET_TYPE_UNSUBACK:
-            GGL_LOGD(
+            GG_LOGD(
                 "Received %s id %u.",
                 "unsuback",
                 deserialized_info->packetIdentifier
             );
             break;
         case MQTT_PACKET_TYPE_PINGRESP:
-            GGL_LOGD("Received pingresp.");
-            atomic_store_explicit(&ping_pending, false, memory_order_release);
+            GG_LOGD("Received pingresp.");
+            ping_pending = false;
+            break;
+        case MQTT_PACKET_TYPE_DISCONNECT:
+            /* Server-initiated disconnect. The receive thread will detect the
+             * connection loss and reconnect automatically. */
+            GG_LOGE("Server-initiated DISCONNECT received.");
             break;
         default:
-            GGL_LOGE("Received unknown packet type %02x.", packet_info->type);
+            GG_LOGE("Received unknown packet type %02x.", packet_info->type);
         }
     }
+
+    return true;
 }

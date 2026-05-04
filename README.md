@@ -20,11 +20,21 @@ To configure and run Greengrass Nucleus Lite, see the
 For setting up as a Greengrass developer, also see the
 [developer setup guide](docs/DEVELOPMENT.md).
 
-For easy device onboarding and examples for specific boards, visit Avnet’s
-/IOTCONNECT Greengrass repository
+For AI agent driven getting started please follow the instruction from the
+[greengrass-agent-context-pack github repo](https://github.com/aws-greengrass/greengrass-agent-context-pack).
+
+For easy device onboarding and example implementation, you may want to check out
+[Avnet's workshop](https://event.on24.com/wcc/r/5114804/16BB67D34A48F65741B4C0A5EA675F1A).
+
+Furthermore you can visit Avnet's IOTCONNECT Greengrass repository
 [on GitHub](https://github.com/avnet-iotconnect/iotc-python-greengrass-sdk) for
 SDKs and Quick Start guides that support platforms such as STM32, Renesas, NXP
 and Raspberry Pi.
+
+For Yocto/OpenEmbedded integration, check out
+[meta-aws](https://github.com/aws4embeddedlinux/meta-aws) and
+[meta-aws-demos](https://github.com/aws4embeddedlinux/meta-aws-demos) which
+provide recipes and examples for building AWS Greengrass Lite.
 
 ### ⚠️ Important Notice
 
@@ -37,9 +47,14 @@ The `main` branch contains ongoing development work and:
 - Could include breaking changes.
 - Is not recommended for production use.
 
+### ⚠️ RISC-V Support Warning
+
+RISC-V architecture support is experimental and not fully tested. Use with
+caution in production environments.
+
 ## Supported Greengrass V2 IPC commands (Features)
 
-IPC support is provided by ggipcd. The support is translating the IPC command to
+IPC support is provided by ggipcd. The support translates the IPC command to
 corebus. This table identifies the corebus component that does the work.
 
 | Feature                        | Daemon that provides support |
@@ -62,7 +77,7 @@ Additional IPC commands will be supported in future releases.
 
 Known issues are documented
 [here](https://github.com/aws-greengrass/aws-greengrass-lite/issues) with some
-potential workarounds. Additionally only basic recipe types are supported, more
+potential workarounds. Additionally, only basic recipe types are supported, more
 information on missing features can be found
 [here](./docs/RECIPE_SUPPORT_CHANGES.md).
 
