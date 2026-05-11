@@ -19,6 +19,7 @@
 #include <gg/socket.h>
 #include <gg/vector.h>
 #include <ggl/core_bus/constants.h>
+#include <ggl/trace.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -65,11 +66,30 @@ GgError ggl_client_send_message(
 
     GgBuffer send_buffer = GG_BUF(ggl_core_bus_client_payload_array);
 
-    EventStreamHeader headers[] = {
-        { GG_STR("method"), { EVENTSTREAM_STRING, .string = method } },
-        { GG_STR("type"), { EVENTSTREAM_INT32, .int32 = (int32_t) type } },
+    EventStreamHeader headers[5];
+    size_t headers_len = 0;
+
+    headers[headers_len++] = (EventStreamHeader) {
+        GG_STR("method"), { EVENTSTREAM_STRING, .string = method }
     };
-    size_t headers_len = sizeof(headers) / sizeof(headers[0]);
+    headers[headers_len++] = (EventStreamHeader) {
+        GG_STR("type"), { EVENTSTREAM_INT32, .int32 = (int32_t) type }
+    };
+
+    if (ggl_trace_active()) {
+        GglTraceCtx trace = ggl_trace_child();
+        headers[headers_len++] = (EventStreamHeader) {
+            GG_STR("T"), { EVENTSTREAM_INT32, .int32 = (int32_t) trace.trace_id }
+        };
+        headers[headers_len++] = (EventStreamHeader) {
+            GG_STR("S"),
+            { EVENTSTREAM_INT32, .int32 = (int32_t) trace.span_id }
+        };
+        headers[headers_len++] = (EventStreamHeader) {
+            GG_STR("P"),
+            { EVENTSTREAM_INT32, .int32 = (int32_t) trace.parent_span_id }
+        };
+    }
 
     GgObject params_obj = gg_obj_map(params);
     ret = eventstream_encode(

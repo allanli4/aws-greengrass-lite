@@ -21,6 +21,7 @@
 #include <ggl/core_bus/server.h>
 #include <ggl/socket_handle.h>
 #include <ggl/socket_server.h>
+#include <ggl/trace.h>
 #include <pthread.h>
 #include <sys/types.h>
 #include <stdatomic.h>
@@ -211,6 +212,7 @@ static GgError client_ready(void *ctx, uint32_t handle) {
     bool method_set = false;
     GglCoreBusRequestType type = GGL_CORE_BUS_CALL;
     bool type_set = false;
+    GglTraceCtx trace = { 0 };
 
     {
         EventStreamHeaderIter iter = msg.headers;
@@ -243,6 +245,18 @@ static GgError client_ready(void *ctx, uint32_t handle) {
                     return GG_ERR_OK;
                 }
                 type_set = true;
+            } else if (gg_buffer_eq(header.name, GG_STR("T"))) {
+                if (header.value.type == EVENTSTREAM_INT32) {
+                    trace.trace_id = (uint32_t) header.value.int32;
+                }
+            } else if (gg_buffer_eq(header.name, GG_STR("S"))) {
+                if (header.value.type == EVENTSTREAM_INT32) {
+                    trace.span_id = (uint32_t) header.value.int32;
+                }
+            } else if (gg_buffer_eq(header.name, GG_STR("P"))) {
+                if (header.value.type == EVENTSTREAM_INT32) {
+                    trace.parent_span_id = (uint32_t) header.value.int32;
+                }
             }
         }
     }
@@ -251,6 +265,10 @@ static GgError client_ready(void *ctx, uint32_t handle) {
         GG_LOGE("Required header missing.");
         send_err_response(handle, GG_ERR_INVALID);
         return GG_ERR_OK;
+    }
+
+    if (trace.trace_id != 0) {
+        ggl_trace_set(trace);
     }
 
     GgMap params = { 0 };
