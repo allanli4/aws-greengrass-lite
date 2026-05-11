@@ -16,6 +16,7 @@
 #include <ggl/core_bus/aws_iot_mqtt.h>
 #include <ggl/core_bus/gg_config.h>
 #include <ggl/core_bus/server.h>
+#include <ggl/trace.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -82,6 +83,7 @@ static GgError connection_status_callback(
 ) {
     (void) ctx;
     (void) handle;
+    ggl_trace_begin();
 
     bool connected;
     GgError ret = ggl_aws_iot_mqtt_connection_status_parse(data, &connected);
@@ -207,6 +209,8 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
             GG_LOGE("Fleet status service thread failed to sleep, exiting.");
             return NULL;
         }
+
+        ggl_trace_begin();
 
         ret = publish_fleet_status_update(
             thing_name, GG_STR("CADENCE"), GG_MAP()

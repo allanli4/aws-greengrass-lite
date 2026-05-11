@@ -27,6 +27,7 @@
 #include <gg/object.h>
 #include <ggipc/auth.h>
 #include <ggl/socket_handle.h>
+#include <ggl/trace.h>
 #include <ggl/socket_server.h>
 #include <pthread.h>
 #include <string.h>
@@ -457,6 +458,7 @@ GgError ggl_ipc_get_component_name(uint32_t handle, GgBuffer *component_name) {
 
 static GgError client_ready(void *ctx, uint32_t handle) {
     (void) ctx;
+    ggl_trace_begin();
 
     static uint8_t payload_array[GGL_IPC_MAX_MSG_LEN];
     GgBuffer recv_buffer = GG_BUF(payload_array);

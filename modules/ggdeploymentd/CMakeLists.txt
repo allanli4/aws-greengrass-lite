@@ -25,7 +25,8 @@ ggl_init_module(
        core-bus-sub-response
        recipe2unit
        PkgConfig::uuid
-       PkgConfig::libsystemd)
+       PkgConfig::libsystemd
+       ggl-trace)
 target_compile_definitions(
   ggdeploymentd
   PRIVATE "GGL_SYSTEMD_SYSTEM_GROUP=\"${GGL_SYSTEMD_SYSTEM_GROUP}\"")

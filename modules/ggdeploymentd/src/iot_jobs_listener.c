@@ -20,6 +20,7 @@
 #include <gg/vector.h>
 #include <ggl/aws_iot_call.h>
 #include <ggl/core_bus/aws_iot_mqtt.h>
+#include <ggl/trace.h>
 #include <ggl/core_bus/client.h>
 #include <ggl/core_bus/gg_config.h>
 #include <pthread.h>
@@ -377,6 +378,7 @@ static GgError next_job_execution_changed_callback(
 ) {
     (void) ctx;
     (void) handle;
+    ggl_trace_begin();
     GG_LOGD("Received next job execution changed response.");
     static uint8_t subscription_scratch[4096];
     GgArena json_allocator = gg_arena_init(GG_BUF(subscription_scratch));
