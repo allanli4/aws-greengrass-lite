@@ -3,4 +3,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ggl_init_module(tesd LIBS gg-sdk ggl-common ggl-http ggl-proxy-environment
-                          core-bus core-bus-gg-config)
+                          core-bus core-bus-gg-config ggl-trace)

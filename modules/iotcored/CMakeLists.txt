@@ -10,4 +10,5 @@ ggl_init_module(
        core-bus-gg-config
        core_mqtt
        ggl-uri
-       PkgConfig::openssl)
+       PkgConfig::openssl
+       ggl-trace)

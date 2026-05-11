@@ -11,4 +11,5 @@ ggl_init_module(
        core-bus
        ggl-socket-server
        core-bus-gg-config
-       PkgConfig::libsystemd)
+       PkgConfig::libsystemd
+       ggl-trace)
