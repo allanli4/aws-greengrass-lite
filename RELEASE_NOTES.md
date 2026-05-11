@@ -1,6 +1,17 @@
+# Release Notes v2.5.1
+
+This release contains the following bug fixes:
+
+- SubscribeToConfigurationUpdate now only notifies subscribers when a
+  configuration value actually changes.
+- Fixed an issue where the deployment source ARN of components could be
+  overwritten by unrelated deployments.
+- Fixed HTTP artifact download retries not triggering on retryable error codes
+  (5xx, 429, etc.).
+
 # Release Notes v2.5.0
 
-- Use of AWS Greengrass Nucleus Lite with HSMs using PKCS#11 is now supported.
+- Use of AWS Greengrass nucleus lite with HSMs using PKCS#11 is now supported.
   PKCS#11 backed key/cert handles can now be used and will be passed to OpenSSL
   to allow handling by system configured OpenSSL Providers.
 - TPM backed keys can now be used with fleet provisioning.
@@ -127,7 +138,7 @@ https://docs.aws.amazon.com/greengrass/v2/developerguide/run-docker-container.ht
 
 # Release Notes v2.1.0
 
-This release includes HTTP proxy support for the AWS Greengrass Nucleus Lite
+This release includes HTTP proxy support for the AWS Greengrass nucleus lite
 runtime.
 
 ## New with this release
