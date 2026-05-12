@@ -48,6 +48,7 @@
 #include <ggl/semver.h>
 #include <ggl/uri.h>
 #include <ggl/zip.h>
+#include <ggl/trace.h>
 #include <grp.h>
 #include <limits.h>
 #include <pwd.h>
@@ -3025,6 +3026,9 @@ static void handle_deployment(
     static uint8_t resolve_dependencies_mem[8192] = { 0 };
     GgArena resolve_dependencies_alloc
         = gg_arena_init(GG_BUF(resolve_dependencies_mem));
+
+    GglTraceCtx saved_resolve = ggl_trace_child_enter();
+    GG_LOGI("Resolving deployment dependencies.");
     ret = resolve_dependencies(
         deployment->components,
         deployment->thing_group,
@@ -3033,6 +3037,8 @@ static void handle_deployment(
         &resolve_dependencies_alloc,
         &resolved_components_kv_vec
     );
+    ggl_trace_exit(saved_resolve);
+
     if (ret != GG_ERR_OK) {
         GG_LOGE(
             "Failed to do dependency resolution for deployment, failing deployment."
@@ -3097,6 +3103,8 @@ static void handle_deployment(
     // the deployment
     GgKVVec components_to_deploy = GG_KV_VEC((GgKV[64]) { 0 });
 
+    GglTraceCtx saved_process = ggl_trace_child_enter();
+    GG_LOGI("Processing component artifacts and configuration.");
     GG_MAP_FOREACH (pair, resolved_components_kv_vec.map) {
         GgBuffer pair_val = gg_obj_into_buf(*gg_kv_val(pair));
 
@@ -3550,10 +3558,13 @@ static void handle_deployment(
             }
         }
     }
+    ggl_trace_exit(saved_process);
 
     // TODO: Add a logic to only run the phases that exist with the latest
     // deployment
     if (components_to_deploy.map.len != 0) {
+        GglTraceCtx saved_install = ggl_trace_child_enter();
+        GG_LOGI("Installing components.");
         // collect all component names that have relevant bootstrap service
         // files
         static GgBuffer bootstrap_comp_name_buf[MAX_COMP_NAME_BUF_SIZE];
@@ -3898,6 +3909,7 @@ static void handle_deployment(
             GG_LOGE("systemctl daemon-reload did not exit normally");
             return;
         }
+        ggl_trace_exit(saved_install);
     }
 
     // NOLINTNEXTLINE(concurrency-mt-unsafe)
@@ -3907,13 +3919,18 @@ static void handle_deployment(
     system_ret = system("systemctl start greengrass-lite.target");
     (void) (system_ret);
 
+    GglTraceCtx saved_health = ggl_trace_child_enter();
+    GG_LOGI("Waiting for deployment health status.");
     ret = wait_for_deployment_status(resolved_components_kv_vec.map);
+    ggl_trace_exit(saved_health);
     if (ret != GG_ERR_OK) {
         return;
     }
 
+    GglTraceCtx saved_cleanup = ggl_trace_child_enter();
     GG_LOGI("Performing cleanup of stale components");
     ret = cleanup_stale_versions(resolved_components_kv_vec.map);
+    ggl_trace_exit(saved_cleanup);
     if (ret != GG_ERR_OK) {
         GG_LOGE("Error while cleaning up stale components after deployment.");
     }
