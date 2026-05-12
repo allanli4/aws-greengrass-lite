@@ -67,7 +67,19 @@ GglTraceCtx ggl_trace_child(void) {
         .span_id = gen_id(),
         .parent_span_id = current_ctx.span_id,
     };
-    current_ctx = ctx;
-    ctx_active = true;
     return ctx;
+}
+
+GglTraceCtx ggl_trace_child_enter(void) {
+    GglTraceCtx saved = current_ctx;
+    current_ctx = (GglTraceCtx) {
+        .trace_id = current_ctx.trace_id,
+        .span_id = gen_id(),
+        .parent_span_id = current_ctx.span_id,
+    };
+    return saved;
+}
+
+void ggl_trace_exit(GglTraceCtx saved) {
+    current_ctx = saved;
 }

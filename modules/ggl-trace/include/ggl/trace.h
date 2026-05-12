@@ -32,4 +32,10 @@ GglTraceCtx ggl_trace_begin(void);
 /// Begin a child span from the current trace context.
 GglTraceCtx ggl_trace_child(void);
 
+/// Enter a child span (mutates TLS). Returns previous context for restore.
+GglTraceCtx ggl_trace_child_enter(void);
+
+/// Restore a previously saved trace context.
+void ggl_trace_exit(GglTraceCtx saved);
+
 #endif
