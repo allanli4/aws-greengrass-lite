@@ -19,6 +19,9 @@
 #include <gg/vector.h>
 #include <ggl/core_bus/constants.h>
 #include <ggl/core_bus/server.h>
+#ifdef GG_TRACE_ENABLED
+#include <ggl/trace.h>
+#endif
 #include <ggl/socket_handle.h>
 #include <ggl/socket_server.h>
 #include <pthread.h>
@@ -298,7 +301,21 @@ static GgError client_ready(void *ctx, uint32_t handle) {
 
             set_current_handle(handle);
 
+#ifdef GG_TRACE_ENABLED
+            // Defensively clear any stale trace context left on this reused
+            // worker thread before applying the inbound trace.
+            gg_log_clear_trace();
+            // Pass by value -- iteration stays local to ggl-trace.
+            ggl_trace_extract_and_apply(msg.headers);
+#endif
+
             ret = handler->handler(handler->ctx, params, handle);
+
+#ifdef GG_TRACE_ENABLED
+            // Clear trace context once the handler returns so it cannot leak
+            // into the next request handled by this worker thread.
+            gg_log_clear_trace();
+#endif
 
             // Handler must either error, or succeed after calling ggl_respond
             // or ggl_sub_accept. Both of those clear current_handle

@@ -19,6 +19,9 @@
 #include <gg/socket.h>
 #include <gg/vector.h>
 #include <ggl/core_bus/constants.h>
+#ifdef GG_TRACE_ENABLED
+#include <ggl/trace.h>
+#endif
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -65,11 +68,14 @@ GgError ggl_client_send_message(
 
     GgBuffer send_buffer = GG_BUF(ggl_core_bus_client_payload_array);
 
-    EventStreamHeader headers[] = {
+    EventStreamHeader headers[5] = {
         { GG_STR("method"), { EVENTSTREAM_STRING, .string = method } },
         { GG_STR("type"), { EVENTSTREAM_INT32, .int32 = (int32_t) type } },
     };
-    size_t headers_len = sizeof(headers) / sizeof(headers[0]);
+    size_t headers_len = 2;
+#ifdef GG_TRACE_ENABLED
+    headers_len += ggl_trace_attach_headers(&headers[2], 3);
+#endif
 
     GgObject params_obj = gg_obj_map(params);
     ret = eventstream_encode(
