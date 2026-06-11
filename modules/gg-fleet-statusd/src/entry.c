@@ -16,6 +16,7 @@
 #include <ggl/core_bus/aws_iot_mqtt.h>
 #include <ggl/core_bus/gg_config.h>
 #include <ggl/core_bus/server.h>
+#include <ggl/trace.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -208,12 +209,21 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
             return NULL;
         }
 
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+        ggl_trace_root_begin("fleet_status_tick", NULL);
+#endif
+
         ret = publish_fleet_status_update(
             thing_name, GG_STR("CADENCE"), GG_MAP()
         );
         if (ret != GG_ERR_OK) {
             GG_LOGE("Failed to publish fleet status update.");
         }
+
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+#endif
     }
 
     return NULL;

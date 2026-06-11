@@ -10,4 +10,5 @@ ggl_init_module(
        core-bus-gghealthd
        core-bus-gg-config
        core-bus-aws-iot-mqtt
-       ggl-constants)
+       ggl-constants
+       ggl-trace)
