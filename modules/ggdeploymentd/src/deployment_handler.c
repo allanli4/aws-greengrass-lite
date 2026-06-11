@@ -46,6 +46,7 @@
 #include <ggl/recipe.h>
 #include <ggl/recipe2unit.h>
 #include <ggl/semver.h>
+#include <ggl/trace.h>
 #include <ggl/uri.h>
 #include <ggl/zip.h>
 #include <grp.h>
@@ -3983,6 +3984,17 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
                ));
 
         bool bootstrap_deployment_succeeded = false;
+
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+        ggl_trace_root_begin(
+            "deployment_jobs",
+            "job_id=%.*s",
+            (int) bootstrap_deployment.deployment_id.len,
+            (char *) bootstrap_deployment.deployment_id.data
+        );
+#endif
+
         handle_deployment(
             &bootstrap_deployment,
             args,
@@ -4017,6 +4029,9 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
         }
 
         // TODO: investigate deployment queue behavior with bootstrap deployment
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+#endif
         ggl_deployment_release(&bootstrap_deployment);
     }
 
@@ -4027,6 +4042,16 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
         if (ret != GG_ERR_OK) {
             return ret;
         }
+
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+        ggl_trace_root_begin(
+            "deployment_jobs",
+            "job_id=%.*s",
+            (int) deployment->deployment_id.len,
+            (char *) deployment->deployment_id.data
+        );
+#endif
 
         GG_LOGI("Processing incoming deployment.");
 
@@ -4057,6 +4082,9 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             GG_LOGE("Failed to delete saved deployment info from config.");
         }
 
+#ifdef GG_TRACE_ENABLED
+        gg_log_clear_trace();
+#endif
         ggl_deployment_release(deployment);
     }
 }
