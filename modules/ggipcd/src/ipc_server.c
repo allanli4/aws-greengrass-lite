@@ -28,6 +28,7 @@
 #include <ggipc/auth.h>
 #include <ggl/socket_handle.h>
 #include <ggl/socket_server.h>
+#include <ggl/trace.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/types.h>
@@ -389,9 +390,29 @@ static GgError handle_stream_operation(
         return ret;
     }
 
-    return ggl_ipc_handle_operation(
+#ifdef GG_TRACE_ENABLED
+    // ggipcd is a trace root: inbound IPC carries no trace context, so start a
+    // fresh trace per operation. Clear first because this epoll worker thread is
+    // reused across requests (a prior handler may have returned without clearing).
+    gg_log_clear_trace();
+    ggl_trace_root_begin(
+        "ipc_request",
+        "op=%.*s",
+        (int) operation.len,
+        (char *) operation.data
+    );
+#endif
+
+    ret = ggl_ipc_handle_operation(
         operation, payload_data, handle, common_headers.stream_id, ipc_error
     );
+
+#ifdef GG_TRACE_ENABLED
+    // Clear so this operation's trace cannot leak into the next request or any
+    // idle logging on this reused worker thread.
+    gg_log_clear_trace();
+#endif
+    return ret;
 }
 
 static GgError handle_operation(
