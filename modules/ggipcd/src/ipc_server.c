@@ -25,10 +25,10 @@
 #include <gg/log.h>
 #include <gg/map.h>
 #include <gg/object.h>
+#include <gg/trace.h>
 #include <ggipc/auth.h>
 #include <ggl/socket_handle.h>
 #include <ggl/socket_server.h>
-#include <ggl/trace.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/types.h>
@@ -395,7 +395,7 @@ static GgError handle_stream_operation(
     // fresh trace per operation. Clear first because this epoll worker thread is
     // reused across requests (a prior handler may have returned without clearing).
     gg_log_clear_trace();
-    ggl_trace_root_begin(
+    gg_trace_root_begin(
         "ipc_request",
         "op=%.*s",
         (int) operation.len,

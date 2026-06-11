@@ -32,6 +32,7 @@
 #include <gg/log.h>
 #include <gg/map.h>
 #include <gg/object.h>
+#include <gg/trace.h>
 #include <gg/utils.h>
 #include <gg/vector.h>
 #include <ggl/core_bus/client.h>
@@ -46,7 +47,6 @@
 #include <ggl/recipe.h>
 #include <ggl/recipe2unit.h>
 #include <ggl/semver.h>
-#include <ggl/trace.h>
 #include <ggl/uri.h>
 #include <ggl/zip.h>
 #include <grp.h>
@@ -3987,7 +3987,7 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
 
 #ifdef GG_TRACE_ENABLED
         gg_log_clear_trace();
-        ggl_trace_root_begin(
+        gg_trace_root_begin(
             "deployment_jobs",
             "job_id=%.*s",
             (int) bootstrap_deployment.deployment_id.len,
@@ -4045,7 +4045,7 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
 
 #ifdef GG_TRACE_ENABLED
         gg_log_clear_trace();
-        ggl_trace_root_begin(
+        gg_trace_root_begin(
             "deployment_jobs",
             "job_id=%.*s",
             (int) deployment->deployment_id.len,

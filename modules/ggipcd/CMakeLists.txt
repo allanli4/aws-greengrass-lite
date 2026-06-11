@@ -12,5 +12,4 @@ ggl_init_module(
        core-bus-aws-iot-mqtt
        core-bus-gghealthd
        ggipc-auth
-       ggl-socket-server
-       ggl-trace)
+       ggl-socket-server)

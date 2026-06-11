@@ -10,13 +10,13 @@
 #include <gg/log.h>
 #include <gg/map.h>
 #include <gg/object.h>
+#include <gg/trace.h>
 #include <gg/types.h>
 #include <gg/utils.h>
 #include <gg_fleet_statusd.h>
 #include <ggl/core_bus/aws_iot_mqtt.h>
 #include <ggl/core_bus/gg_config.h>
 #include <ggl/core_bus/server.h>
-#include <ggl/trace.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <sys/types.h>
@@ -211,7 +211,7 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
 
 #ifdef GG_TRACE_ENABLED
         gg_log_clear_trace();
-        ggl_trace_root_begin("fleet_status_tick", NULL);
+        gg_trace_root_begin("fleet_status_tick", NULL);
 #endif
 
         ret = publish_fleet_status_update(

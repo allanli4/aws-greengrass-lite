@@ -10,7 +10,6 @@ ggl_init_module(
        core-bus
        ggl-docker-client
        ggl-http
-       ggl-trace
        ggl-uri
        ggl-json
        ggl-proxy-environment

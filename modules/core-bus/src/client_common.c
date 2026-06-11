@@ -17,11 +17,9 @@
 #include <gg/log.h>
 #include <gg/object.h>
 #include <gg/socket.h>
+#include <gg/trace.h>
 #include <gg/vector.h>
 #include <ggl/core_bus/constants.h>
-#ifdef GG_TRACE_ENABLED
-#include <ggl/trace.h>
-#endif
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -74,7 +72,7 @@ GgError ggl_client_send_message(
     };
     size_t headers_len = 2;
 #ifdef GG_TRACE_ENABLED
-    headers_len += ggl_trace_attach_headers(&headers[2], 3);
+    headers_len += gg_trace_attach_headers(&headers[2], 3);
 #endif
 
     GgObject params_obj = gg_obj_map(params);
