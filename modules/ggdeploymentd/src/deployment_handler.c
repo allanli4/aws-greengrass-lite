@@ -3993,6 +3993,7 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             (int) bootstrap_deployment.deployment_id.len,
             (char *) bootstrap_deployment.deployment_id.data
         );
+        GG_TRACE_SCOPE_GUARD();
 #endif
 
         handle_deployment(
@@ -4029,9 +4030,6 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
         }
 
         // TODO: investigate deployment queue behavior with bootstrap deployment
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-#endif
         ggl_deployment_release(&bootstrap_deployment);
     }
 
@@ -4051,6 +4049,7 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             (int) deployment->deployment_id.len,
             (char *) deployment->deployment_id.data
         );
+        GG_TRACE_SCOPE_GUARD();
 #endif
 
         GG_LOGI("Processing incoming deployment.");
@@ -4082,9 +4081,6 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             GG_LOGE("Failed to delete saved deployment info from config.");
         }
 
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-#endif
         ggl_deployment_release(deployment);
     }
 }

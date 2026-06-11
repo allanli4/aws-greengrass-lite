@@ -212,6 +212,7 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
 #ifdef GG_TRACE_ENABLED
         gg_log_clear_trace();
         gg_trace_root_begin("fleet_status_tick", NULL);
+        GG_TRACE_SCOPE_GUARD();
 #endif
 
         ret = publish_fleet_status_update(
@@ -220,10 +221,6 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
         if (ret != GG_ERR_OK) {
             GG_LOGE("Failed to publish fleet status update.");
         }
-
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-#endif
     }
 
     return NULL;

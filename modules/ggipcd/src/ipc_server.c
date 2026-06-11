@@ -401,18 +401,12 @@ static GgError handle_stream_operation(
         (int) operation.len,
         (char *) operation.data
     );
+    GG_TRACE_SCOPE_GUARD();
 #endif
 
-    ret = ggl_ipc_handle_operation(
+    return ggl_ipc_handle_operation(
         operation, payload_data, handle, common_headers.stream_id, ipc_error
     );
-
-#ifdef GG_TRACE_ENABLED
-    // Clear so this operation's trace cannot leak into the next request or any
-    // idle logging on this reused worker thread.
-    gg_log_clear_trace();
-#endif
-    return ret;
 }
 
 static GgError handle_operation(

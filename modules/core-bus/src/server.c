@@ -305,15 +305,10 @@ static GgError client_ready(void *ctx, uint32_t handle) {
             gg_log_clear_trace();
             // Pass by value -- iteration stays local to gg-sdk.
             gg_trace_extract_and_apply(msg.headers);
+            GG_TRACE_SCOPE_GUARD();
 #endif
 
             ret = handler->handler(handler->ctx, params, handle);
-
-#ifdef GG_TRACE_ENABLED
-            // Clear trace context once the handler returns so it cannot leak
-            // into the next request handled by this worker thread.
-            gg_log_clear_trace();
-#endif
 
             // Handler must either error, or succeed after calling ggl_respond
             // or ggl_sub_accept. Both of those clear current_handle
