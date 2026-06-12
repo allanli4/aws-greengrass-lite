@@ -299,14 +299,10 @@ static GgError client_ready(void *ctx, uint32_t handle) {
 
             set_current_handle(handle);
 
-#ifdef GG_TRACE_ENABLED
-            // Defensively clear any stale trace context left on this reused
-            // worker thread before applying the inbound trace.
-            gg_log_clear_trace();
-            // Pass by value -- iteration stays local to gg-sdk.
-            gg_trace_extract_and_apply(msg.headers);
-            GG_TRACE_SCOPE_GUARD();
-#endif
+            // Inherit any inbound trace context for the handler's duration;
+            // defensively clears stale context on this reused worker thread
+            // first, and clears again on scope exit.
+            GG_TRACE_INHERIT_SCOPE(msg.headers);
 
             ret = handler->handler(handler->ctx, params, handle);
 

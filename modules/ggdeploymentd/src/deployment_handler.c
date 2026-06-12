@@ -3985,16 +3985,12 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
 
         bool bootstrap_deployment_succeeded = false;
 
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-        gg_trace_root_begin(
+        GG_TRACE_ROOT_SCOPE(
             "deployment_jobs",
             "job_id=%.*s",
             (int) bootstrap_deployment.deployment_id.len,
             (char *) bootstrap_deployment.deployment_id.data
         );
-        GG_TRACE_SCOPE_GUARD();
-#endif
 
         handle_deployment(
             &bootstrap_deployment,
@@ -4041,16 +4037,12 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             return ret;
         }
 
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-        gg_trace_root_begin(
+        GG_TRACE_ROOT_SCOPE(
             "deployment_jobs",
             "job_id=%.*s",
             (int) deployment->deployment_id.len,
             (char *) deployment->deployment_id.data
         );
-        GG_TRACE_SCOPE_GUARD();
-#endif
 
         GG_LOGI("Processing incoming deployment.");
 

@@ -390,19 +390,14 @@ static GgError handle_stream_operation(
         return ret;
     }
 
-#ifdef GG_TRACE_ENABLED
     // ggipcd is a trace root: inbound IPC carries no trace context, so start a
-    // fresh trace per operation. Clear first because this epoll worker thread is
-    // reused across requests (a prior handler may have returned without clearing).
-    gg_log_clear_trace();
-    gg_trace_root_begin(
+    // fresh trace per operation (cleared automatically on scope exit).
+    GG_TRACE_ROOT_SCOPE(
         "ipc_request",
         "op=%.*s",
         (int) operation.len,
         (char *) operation.data
     );
-    GG_TRACE_SCOPE_GUARD();
-#endif
 
     return ggl_ipc_handle_operation(
         operation, payload_data, handle, common_headers.stream_id, ipc_error

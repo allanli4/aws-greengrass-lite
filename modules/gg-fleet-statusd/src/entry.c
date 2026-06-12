@@ -209,11 +209,7 @@ static void *ggl_fleet_status_service_thread(void *ctx) {
             return NULL;
         }
 
-#ifdef GG_TRACE_ENABLED
-        gg_log_clear_trace();
-        gg_trace_root_begin("fleet_status_tick", NULL);
-        GG_TRACE_SCOPE_GUARD();
-#endif
+        GG_TRACE_ROOT_SCOPE("fleet_status_tick", NULL);
 
         ret = publish_fleet_status_update(
             thing_name, GG_STR("CADENCE"), GG_MAP()
