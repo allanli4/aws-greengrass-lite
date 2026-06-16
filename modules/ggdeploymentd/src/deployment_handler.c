@@ -55,6 +55,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -73,6 +74,16 @@ static struct DeploymentConfiguration {
     char region[24];
     char port[16];
 } config;
+
+// Set while a deployment is actively being processed by the handler thread.
+// Read from the component-status listener (running on a different thread) to
+// suppress per-component cloud status updates during a deployment, since the
+// deployment path already reports to the fleet status service itself.
+static atomic_bool deployment_in_progress;
+
+bool ggl_deployment_in_progress(void) {
+    return atomic_load(&deployment_in_progress);
+}
 
 typedef struct TesCredentials {
     GgBuffer aws_region;
@@ -1113,10 +1124,20 @@ static GgError generate_resolve_component_candidates_body(
         &architecture_detail_read_value
     );
     if (ret != GG_ERR_OK) {
-        GG_LOGD(
-            "No architecture.detail found, so not including it in the component candidates search."
-        );
-        architecture_detail_read_value = gg_obj_buf(GG_STR(""));
+        GG_LOGD("No architecture.detail found.");
+
+        GgBuffer current_arch_detail = get_current_architecture_detail();
+        if (current_arch_detail.len == 0) {
+            GG_LOGD("Not including it in the component candidates search.");
+        } else {
+            GG_LOGD(
+                "Using compiler provided architecture details %.*s.",
+                (int) current_arch_detail.len,
+                current_arch_detail.data
+            );
+        }
+
+        architecture_detail_read_value = gg_obj_buf(current_arch_detail);
     }
 
     if (gg_obj_type(architecture_detail_read_value) != GG_TYPE_BUF) {
@@ -1534,9 +1555,16 @@ static GgError resolve_dependencies(
     GglDeploymentType deployment_type,
     GglDeploymentHandlerThreadArgs *args,
     GgArena *alloc,
-    GgKVVec *resolved_components_kv_vec
+    GgKVVec *resolved_components_kv_vec,
+    bool *out_depends_on_token_exchange_service
 ) {
     GgError ret;
+
+    // Built-in components (e.g. TokenExchangeService) are skipped below and
+    // never enter the resolved set. Report whether the device's merged
+    // dependency closure needs TES so the caller can keep its fleet
+    // configuration ARN in sync for gg-fleet-statusd reporting.
+    *out_depends_on_token_exchange_service = false;
 
     // TODO: Decide on size
     GgKVVec components_to_resolve = GG_KV_VEC((GgKV[64]) { 0 });
@@ -2058,6 +2086,20 @@ static GgError resolve_dependencies(
                     || gg_buffer_eq(
                         gg_kv_key(*dependency), GG_STR("aws.greengrass.Cli")
                     )) {
+                    // TokenExchangeService is a built-in component that is
+                    // never resolved or installed through a deployment, so the
+                    // component-processing loop never tags it with this
+                    // deployment's configuration ARN. Record that the device's
+                    // dependency closure includes TES so the caller can keep
+                    // its fleet configuration ARN in sync; otherwise
+                    // gg-fleet-statusd reports TES with an empty
+                    // fleetConfigArns and the cloud will not display it.
+                    if (gg_buffer_eq(
+                            gg_kv_key(*dependency),
+                            GG_STR("aws.greengrass.TokenExchangeService")
+                        )) {
+                        *out_depends_on_token_exchange_service = true;
+                    }
                     GG_LOGD(
                         "Skipping a dependency during resolution as it is %.*s",
                         (int) gg_kv_key(*dependency).len,
@@ -2332,7 +2374,9 @@ static GgError add_arn_list_to_config(
 }
 
 static GgError send_fss_update(
-    GglDeployment *deployment, bool deployment_succeeded
+    GglDeployment *deployment,
+    bool deployment_succeeded,
+    GgBufList removed_components
 ) {
     GgBuffer server = GG_STR("gg_fleet_status");
     static uint8_t buffer[10 * sizeof(GgObject)] = { 0 };
@@ -2373,9 +2417,32 @@ static GgError send_fss_update(
         trigger = GG_STR("THING_GROUP_DEPLOYMENT");
     }
 
+    // Project the bufs into GgObjects so we can pass them as a list. The
+    // backing storage for the names is owned by the caller and outlives this
+    // call.
+    GgObject removed_objs[GGL_MAX_GENERIC_COMPONENTS];
+    size_t removed_count = removed_components.len;
+    if (removed_count > GGL_MAX_GENERIC_COMPONENTS) {
+        GG_LOGW(
+            "Truncating removed component list from %zu to %d for fleet "
+            "status update.",
+            removed_count,
+            GGL_MAX_GENERIC_COMPONENTS
+        );
+        removed_count = GGL_MAX_GENERIC_COMPONENTS;
+    }
+    for (size_t i = 0; i < removed_count; i++) {
+        removed_objs[i] = gg_obj_buf(removed_components.bufs[i]);
+    }
+    GgList removed_list
+        = (GgList) { .items = removed_objs, .len = removed_count };
+
+    // Always pass the key so the receiver does not need to special-case its
+    // absence; an empty list is the no-removals signal.
     GgMap args = GG_MAP(
         gg_kv(GG_STR("trigger"), gg_obj_buf(trigger)),
-        gg_kv(GG_STR("deployment_info"), gg_obj_map(deployment_info))
+        gg_kv(GG_STR("deployment_info"), gg_obj_map(deployment_info)),
+        gg_kv(GG_STR("removed_components"), gg_obj_list(removed_list))
     );
 
     GgArena alloc = gg_arena_init(GG_BUF(buffer));
@@ -2728,8 +2795,11 @@ static void report_endpoint_switch_status_to_source(
     PublishToSourceCtx pub_ctx = { .deployment_id = deployment_id };
     ret = gg_backoff(1000, 60000, 8, report_success_to_source, &pub_ctx);
     if (ret != GG_ERR_OK) {
-        GG_LOGW("Failed to report SUCCEEDED to source account; "
-                "source IoT Job will time out.");
+        GG_LOGW(
+            "Failed to report SUCCEEDED to source account (%s); "
+            "source IoT Job will time out.",
+            gg_strerror(ret)
+        );
     } else {
         GG_LOGI("Reported SUCCEEDED to source account.");
     }
@@ -3026,19 +3096,55 @@ static void handle_deployment(
     static uint8_t resolve_dependencies_mem[8192] = { 0 };
     GgArena resolve_dependencies_alloc
         = gg_arena_init(GG_BUF(resolve_dependencies_mem));
+    bool depends_on_token_exchange_service;
     ret = resolve_dependencies(
         deployment->components,
         deployment->thing_group,
         deployment->type,
         args,
         &resolve_dependencies_alloc,
-        &resolved_components_kv_vec
+        &resolved_components_kv_vec,
+        &depends_on_token_exchange_service
     );
     if (ret != GG_ERR_OK) {
         GG_LOGE(
             "Failed to do dependency resolution for deployment, failing deployment."
         );
         return;
+    }
+
+    // aws.greengrass.TokenExchangeService is a built-in component that is
+    // skipped during dependency resolution, so the component-processing loop
+    // below never tags it with this deployment's configuration ARN. Keep its
+    // fleet configuration ARN in sync here so gg-fleet-statusd reports it (and
+    // the cloud displays it) exactly while some component on the device depends
+    // on it. resolve_dependencies merges every thing group and local deployment
+    // into the resolved set, so depends_on_token_exchange_service is a
+    // device-wide signal: associate TES with this deployment's configuration
+    // ARN when it is needed, and clear the association when nothing depends on
+    // it anymore. Written at timestamp 3 so it overrides the lowest-priority
+    // empty seed written by tes-serverd and persists across restarts. This is
+    // best-effort cloud-reporting metadata, so a failure must not fail the
+    // deployment.
+    GgObject tes_config_arn = gg_obj_buf(deployment->configuration_arn);
+    GgObject tes_config_arn_list = gg_obj_list(GG_LIST());
+    if (depends_on_token_exchange_service) {
+        tes_config_arn_list
+            = gg_obj_list((GgList) { .items = &tes_config_arn, .len = 1 });
+    }
+    GgError tes_arn_ret = ggl_gg_config_write(
+        GG_BUF_LIST(
+            GG_STR("services"),
+            GG_STR("aws.greengrass.TokenExchangeService"),
+            GG_STR("configArn")
+        ),
+        tes_config_arn_list,
+        &(int64_t) { 3 }
+    );
+    if (tes_arn_ret != GG_ERR_OK) {
+        GG_LOGW(
+            "Failed to update aws.greengrass.TokenExchangeService fleet configuration ARN; its console visibility may be stale."
+        );
     }
 
     GgByteVec region = GG_BYTE_VEC(config.region);
@@ -3464,7 +3570,8 @@ static void handle_deployment(
             return;
         }
 
-        if (component_updated) {
+        if (component_updated
+            || is_component_config_updated(deployment, gg_kv_key(*pair))) {
             ret = gg_kv_vec_push(
                 &components_to_deploy, gg_kv(gg_kv_key(*pair), *gg_kv_val(pair))
             );
@@ -3914,7 +4021,11 @@ static void handle_deployment(
     }
 
     GG_LOGI("Performing cleanup of stale components");
-    ret = cleanup_stale_versions(resolved_components_kv_vec.map);
+    ret = cleanup_stale_versions(
+        resolved_components_kv_vec.map,
+        ctx->removed_names_storage,
+        ctx->removed_components
+    );
     if (ret != GG_ERR_OK) {
         GG_LOGE("Error while cleaning up stale components after deployment.");
     }
@@ -3963,7 +4074,20 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
     GglDeployment bootstrap_deployment = { 0 };
     uint8_t jobs_id_resp_mem[64] = { 0 };
     GgBuffer jobs_id = GG_BUF(jobs_id_resp_mem);
-    DeploymentContext bootstrap_ctx = { 0 };
+
+    // Storage for components fully removed during cleanup_stale_versions.
+    // Bytes for each name go into the byte vec; the bufvec holds slices into
+    // those bytes. Both must outlive the FSS call below.
+    static uint8_t bootstrap_removed_names_mem[MAX_COMP_NAME_BUF_SIZE];
+    GgByteVec bootstrap_removed_names_storage
+        = GG_BYTE_VEC(bootstrap_removed_names_mem);
+    static GgBuffer bootstrap_removed_bufs[GGL_MAX_GENERIC_COMPONENTS];
+    GgBufVec bootstrap_removed_components = GG_BUF_VEC(bootstrap_removed_bufs);
+
+    DeploymentContext bootstrap_ctx = {
+        .removed_names_storage = &bootstrap_removed_names_storage,
+        .removed_components = &bootstrap_removed_components,
+    };
 
     GgError ret = retrieve_in_progress_deployment(
         &bootstrap_deployment, &jobs_id, &bootstrap_ctx
@@ -3992,12 +4116,16 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             (char *) bootstrap_deployment.deployment_id.data
         );
 
+        atomic_store(&deployment_in_progress, true);
+        GG_LOGD("Deployment in progress (resuming bootstrap deployment).");
         handle_deployment(
             &bootstrap_deployment,
             args,
             &bootstrap_ctx,
             &bootstrap_deployment_succeeded
         );
+        atomic_store(&deployment_in_progress, false);
+        GG_LOGD("Bootstrap deployment processing complete.");
 
         if (bootstrap_ctx.source_iot_data_endpoint.len > 0
             && !bootstrap_deployment_succeeded) {
@@ -4005,7 +4133,9 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
         }
 
         (void) send_fss_update(
-            &bootstrap_deployment, bootstrap_deployment_succeeded
+            &bootstrap_deployment,
+            bootstrap_deployment_succeeded,
+            bootstrap_removed_components.buf_list
         );
 
         if (send_deployment_update) {
@@ -4044,6 +4174,8 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
             (char *) deployment->deployment_id.data
         );
 
+        set_current_job(deployment->iot_job_id, deployment->deployment_id);
+
         GG_LOGI("Processing incoming deployment.");
 
         (void) update_current_jobs_deployment(
@@ -4051,14 +4183,31 @@ static GgError ggl_deployment_listen(GglDeploymentHandlerThreadArgs *args) {
         );
 
         bool deployment_succeeded = false;
-        DeploymentContext ctx = { 0 };
+
+        // Per-deployment storage for components that get fully removed
+        // during cleanup_stale_versions. Reset for each deployment.
+        static uint8_t removed_names_mem[MAX_COMP_NAME_BUF_SIZE];
+        GgByteVec removed_names_storage = GG_BYTE_VEC(removed_names_mem);
+        static GgBuffer removed_bufs[GGL_MAX_GENERIC_COMPONENTS];
+        GgBufVec removed_components = GG_BUF_VEC(removed_bufs);
+
+        DeploymentContext ctx = {
+            .removed_names_storage = &removed_names_storage,
+            .removed_components = &removed_components,
+        };
+        atomic_store(&deployment_in_progress, true);
+        GG_LOGD("Deployment in progress.");
         handle_deployment(deployment, args, &ctx, &deployment_succeeded);
+        atomic_store(&deployment_in_progress, false);
+        GG_LOGD("Deployment processing complete.");
 
         if (ctx.source_iot_data_endpoint.len > 0 && !deployment_succeeded) {
             rollback_config(deployment->deployment_id);
         }
 
-        (void) send_fss_update(deployment, deployment_succeeded);
+        (void) send_fss_update(
+            deployment, deployment_succeeded, removed_components.buf_list
+        );
 
         // TODO: need error details from handle_deployment
         report_deployment_status(

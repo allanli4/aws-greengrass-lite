@@ -15,6 +15,7 @@
 #include <gg/vector.h>
 #include <ggl/core_bus/gg_config.h>
 #include <ggl/json_pointer.h>
+#include <stdbool.h>
 #include <stddef.h>
 
 static GgError apply_reset_config(
@@ -240,3 +241,79 @@ GgError apply_configurations(
 
     return GG_ERR_OK;
 }
+
+bool is_component_config_updated(
+    GglDeployment *deployment, GgBuffer component_name
+) {
+    GgObject *doc_component_info;
+    if (!gg_map_get(
+            deployment->components, component_name, &doc_component_info
+        )) {
+        return false;
+    }
+    if (gg_obj_type(*doc_component_info) != GG_TYPE_MAP) {
+        return false;
+    }
+    if (!gg_map_get(
+            gg_obj_into_map(*doc_component_info),
+            GG_STR("configurationUpdate"),
+            NULL
+        )) {
+        return false;
+    }
+    return true;
+}
+
+#ifdef GG_SDK_TESTING
+
+#include <gg/test.h>
+#include <unity.h>
+
+GG_TEST_DEFINE(config_updated_component_not_in_deployment) {
+    GglDeployment deployment
+        = { .components
+            = GG_MAP(gg_kv(GG_STR("other"), gg_obj_map(GG_MAP()))) };
+    TEST_ASSERT_FALSE(
+        is_component_config_updated(&deployment, GG_STR("myComponent"))
+    );
+}
+
+GG_TEST_DEFINE(config_updated_component_not_a_map) {
+    GglDeployment deployment = {
+        .components
+        = GG_MAP(gg_kv(GG_STR("myComponent"), gg_obj_buf(GG_STR("notamap"))))
+    };
+    TEST_ASSERT_FALSE(
+        is_component_config_updated(&deployment, GG_STR("myComponent"))
+    );
+}
+
+GG_TEST_DEFINE(config_updated_no_configuration_update_key) {
+    GglDeployment deployment
+        = { .components = GG_MAP(gg_kv(
+                GG_STR("myComponent"),
+                gg_obj_map(GG_MAP(
+                    gg_kv(GG_STR("version"), gg_obj_buf(GG_STR("1.0.0")))
+                ))
+            )) };
+    TEST_ASSERT_FALSE(
+        is_component_config_updated(&deployment, GG_STR("myComponent"))
+    );
+}
+
+GG_TEST_DEFINE(config_updated_has_configuration_update) {
+    GglDeployment deployment = {
+        .components = GG_MAP(gg_kv(
+            GG_STR("myComponent"),
+            gg_obj_map(GG_MAP(gg_kv(
+                GG_STR("configurationUpdate"),
+                gg_obj_map(GG_MAP(gg_kv(GG_STR("merge"), gg_obj_map(GG_MAP()))))
+            )))
+        ))
+    };
+    TEST_ASSERT_TRUE(
+        is_component_config_updated(&deployment, GG_STR("myComponent"))
+    );
+}
+
+#endif

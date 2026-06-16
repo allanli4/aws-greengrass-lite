@@ -6,6 +6,8 @@
 #include "bootstrap_manager.h"
 #include "deployment_model.h"
 #include "deployment_queue.h"
+#include "status_keeper.h"
+#include <assert.h>
 #include <gg/arena.h>
 #include <gg/backoff.h>
 #include <gg/buffer.h>
@@ -22,14 +24,19 @@
 #include <ggl/core_bus/aws_iot_mqtt.h>
 #include <ggl/core_bus/client.h>
 #include <ggl/core_bus/gg_config.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdnoreturn.h>
 
 #define MAX_THING_NAME_LEN 128
+
+// Re-publish a persisted status at most this often while one is pending, so a
+// publish that failed without an MQTT disconnect still recovers.
+#define STATUS_FLUSH_RETRY_SECONDS 60
 
 typedef enum QualityOfService {
     QOS_FIRE_AND_FORGET = 0,
@@ -65,10 +72,28 @@ static uint8_t current_job_id_buf[64];
 static GgByteVec current_job_id;
 static uint8_t current_deployment_id_buf[64];
 static GgByteVec current_deployment_id;
+static uint8_t last_queue_job_id_buf[64];
+static GgByteVec last_queue_job_id;
+static int64_t last_queue_at;
 
 static pthread_mutex_t listener_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t listener_cond = PTHREAD_COND_INITIALIZER;
+// listener_cond uses CLOCK_MONOTONIC so the flush retry timeout is immune to
+// wall-clock changes. It is initialized exactly once via listener_cond_once:
+// both the listener thread (before waiting) and update_job_to on the
+// deployment-handler thread (before signaling) run pthread_once, since either
+// may reach the cond first after startup.
+static pthread_cond_t listener_cond;
+static pthread_once_t listener_cond_once = PTHREAD_ONCE_INIT;
 static bool needs_describe = false;
+static bool needs_flush = false;
+
+static void init_listener_cond(void) {
+    pthread_condattr_t cond_attr;
+    pthread_condattr_init(&cond_attr);
+    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&listener_cond, &cond_attr);
+    pthread_condattr_destroy(&cond_attr);
+}
 
 static void listen_for_jobs_deployments(void);
 
@@ -172,6 +197,29 @@ static GgError deserialize_payload(
     return GG_ERR_OK;
 }
 
+// True if an IoT Jobs UpdateJobExecution rejection won't succeed on retry, per
+// the Jobs ErrorResponse "code" contract. InternalError and RequestThrottled
+// are transient, and any unrecognized code is treated as transient too, so
+// those fall through to the persist/retry path.
+static bool reject_is_permanent(GgObject result) {
+    if (gg_obj_type(result) != GG_TYPE_MAP) {
+        return false;
+    }
+    GgObject *code_obj;
+    if (!gg_map_get(gg_obj_into_map(result), GG_STR("code"), &code_obj)
+        || (gg_obj_type(*code_obj) != GG_TYPE_BUF)) {
+        return false;
+    }
+    GgBuffer code = gg_obj_into_buf(*code_obj);
+    return gg_buffer_eq(code, GG_STR("InvalidTopic"))
+        || gg_buffer_eq(code, GG_STR("InvalidJson"))
+        || gg_buffer_eq(code, GG_STR("InvalidRequest"))
+        || gg_buffer_eq(code, GG_STR("InvalidStateTransition"))
+        || gg_buffer_eq(code, GG_STR("ResourceNotFound"))
+        || gg_buffer_eq(code, GG_STR("VersionMismatch"))
+        || gg_buffer_eq(code, GG_STR("TerminalStateReached"));
+}
+
 static GgError update_job_to(
     GgBuffer job_id, GgBuffer job_status, GgBuffer socket_name
 ) {
@@ -181,6 +229,11 @@ static GgError update_job_to(
         return ret;
     }
 
+    // The pending-status slot is only tracked for the primary MQTT socket.
+    // The endpoint-switch path uses a temporary "iotcoreddeploy" socket with
+    // its own retry; persisting that would later flush via the wrong account.
+    bool track_pending = gg_buffer_eq(socket_name, GG_STR("aws_iot_mqtt"));
+
     // expectedVersion omitted to avoid VersionMismatch errors on MQTT
     // reconnect races; only one ggdeploymentd updates a given job.
     GgObject payload_object = gg_obj_map(GG_MAP(
@@ -188,7 +241,9 @@ static GgError update_job_to(
         gg_kv(GG_STR("clientToken"), gg_obj_buf(GG_STR("jobs-nucleus-lite")))
     ));
 
-    static uint8_t response_scratch[512];
+    // Holds the decoded /accepted or /rejected response. Sized to fit a
+    // rejection's executionState payload so the reject code can be classified.
+    static uint8_t response_scratch[1024];
     GgArena call_alloc = gg_arena_init(GG_BUF(response_scratch));
     GgObject result = { 0 };
     ret = ggl_aws_iot_call(
@@ -196,7 +251,39 @@ static GgError update_job_to(
     );
     if (ret != GG_ERR_OK) {
         GG_LOGE("Failed to publish on update job topic.");
+        if (track_pending) {
+            if ((ret == GG_ERR_REMOTE) && reject_is_permanent(result)) {
+                // Cloud permanently rejected this update (e.g. the job already
+                // reached a terminal state, or was superseded). Retrying can't
+                // succeed, so drop any pending slot instead of re-sending it
+                // indefinitely.
+                GG_LOGW(
+                    "Update permanently rejected; clearing pending status for "
+                    "job %.*s.",
+                    (int) job_id.len,
+                    job_id.data
+                );
+                (void) status_keeper_clear();
+            } else {
+                // Transport failure / timeout / retryable reject
+                // (InternalError, RequestThrottled): persist so the job
+                // listener can re-send the status after reconnect or restart,
+                // and wake it to start the periodic flush retry even when no
+                // MQTT reconnect follows.
+                (void) status_keeper_persist(job_id, job_status);
+                pthread_once(&listener_cond_once, init_listener_cond);
+                GG_MTX_SCOPE_GUARD(&listener_mutex);
+                pthread_cond_signal(&listener_cond);
+            }
+        }
         return GG_ERR_FAILURE;
+    }
+
+    // Publish succeeded: drop any previously-persisted pending status (it is
+    // now delivered, or superseded by this newer one). Self-gated in
+    // status_keeper, so the happy path issues no config call.
+    if (track_pending) {
+        (void) status_keeper_clear();
     }
 
     // save jobs ID to config in case of bootstrap
@@ -270,37 +357,51 @@ static GgError describe_next_job(void *ctx) {
     return process_job_execution(gg_obj_into_map(*execution));
 }
 
-static GgError enqueue_job(GgMap deployment_doc, GgBuffer job_id) {
+static GgError enqueue_job(
+    GgMap deployment_doc, GgBuffer job_id, int64_t queued_at
+) {
     GgError ret;
     {
         GG_MTX_SCOPE_GUARD(&current_job_id_mutex);
-        if (gg_buffer_eq(current_job_id.buf, job_id)) {
-            GG_LOGI("Duplicate job document received. Skipping.");
+        if (gg_buffer_eq(last_queue_job_id.buf, job_id)
+            && (queued_at <= last_queue_at)) {
+            GG_LOGI(
+                "Duplicate job notification for %.*s "
+                "(queuedAt=%" PRId64 "). Skipping.",
+                (int) job_id.len,
+                job_id.data,
+                queued_at
+            );
             return GG_ERR_OK;
         }
-
-        current_job_id = GG_BYTE_VEC(current_job_id_buf);
-        ret = gg_byte_vec_append(&current_job_id, job_id);
-        if (ret != GG_ERR_OK) {
-            GG_LOGE("Job ID too long.");
-            return ret;
-        }
-
-        current_deployment_id = GG_BYTE_VEC(current_deployment_id_buf);
-
-        // TODO: backoff algorithm
-        int64_t retries = 1;
-        while (
-            (ret = ggl_deployment_enqueue(
-                 deployment_doc, &current_deployment_id, THING_GROUP_DEPLOYMENT
-             ))
-            == GG_ERR_BUSY
-        ) {
-            int64_t sleep_for = 1 << MIN(7, retries);
-            (void) gg_sleep(sleep_for);
-            ++retries;
-        }
+        last_queue_job_id = GG_BYTE_VEC(last_queue_job_id_buf);
+        GgError append_ret = gg_byte_vec_append(&last_queue_job_id, job_id);
+        assert(append_ret == GG_ERR_OK);
+        last_queue_at = queued_at;
     }
+
+    GgByteVec deployment_id_vec = GG_BYTE_VEC((uint8_t[64]) { 0 });
+
+    // TODO: backoff algorithm
+    int64_t retries = 1;
+    while (
+        (ret = ggl_deployment_enqueue(
+             deployment_doc, &deployment_id_vec, job_id, THING_GROUP_DEPLOYMENT
+         ))
+        == GG_ERR_BUSY
+    ) {
+        int64_t sleep_for = 1 << MIN(7, retries);
+        (void) gg_sleep(sleep_for);
+        ++retries;
+    }
+
+    // A new deployment supersedes any status still pending for a previous one.
+    // greengrass lite tracks a single deployment at a time ($next), so reaching
+    // here with a new job_id means the prior deployment has finalized and any
+    // held status is stale -- drop it so we never re-publish a superseded job's
+    // status. status_keeper_clear() self-gates on the pending hint, so this is
+    // a no-op when nothing is pending.
+    (void) status_keeper_clear();
 
     if (ret != GG_ERR_OK) {
         (void) update_job(job_id, GG_STR("FAILURE"));
@@ -313,12 +414,17 @@ static GgError process_job_execution(GgMap job_execution) {
     GgObject *job_id = NULL;
     GgObject *status = NULL;
     GgObject *deployment_doc = NULL;
+    GgObject *queued_at_obj = NULL;
     GgError err = gg_map_validate(
         job_execution,
         GG_MAP_SCHEMA(
             { GG_STR("jobId"), GG_OPTIONAL, GG_TYPE_BUF, &job_id },
             { GG_STR("status"), GG_OPTIONAL, GG_TYPE_BUF, &status },
-            { GG_STR("jobDocument"), GG_OPTIONAL, GG_TYPE_MAP, &deployment_doc }
+            { GG_STR("jobDocument"),
+              GG_OPTIONAL,
+              GG_TYPE_MAP,
+              &deployment_doc },
+            { GG_STR("queuedAt"), GG_REQUIRED, GG_TYPE_I64, &queued_at_obj }
         )
     );
     if (err != GG_ERR_OK) {
@@ -356,13 +462,14 @@ static GgError process_job_execution(GgMap job_execution) {
 
     case DSA_ENQUEUE_JOB: {
         if (deployment_doc == NULL) {
-            GG_LOGE(
-                "Job status is queued/in progress, but no deployment doc was given."
-            );
+            GG_LOGE("Job status is queued/in progress, but no deployment doc "
+                    "was given.");
             return GG_ERR_INVALID;
         }
         (void) enqueue_job(
-            gg_obj_into_map(*deployment_doc), gg_obj_into_buf(*job_id)
+            gg_obj_into_map(*deployment_doc),
+            gg_obj_into_buf(*job_id),
+            gg_obj_into_i64(*queued_at_obj)
         );
         break;
     }
@@ -412,21 +519,82 @@ static GgError next_job_execution_changed_callback(
     return GG_ERR_OK;
 }
 
+// Re-send the persisted pending status (if any) by re-running update_job with
+// the slot's contents. On success update_job_to clears the slot; on failure it
+// re-persists. Reads from config each time, so a status persisted before a
+// restart is recovered.
+static void flush_pending_status(void) {
+    static uint8_t slot_scratch[512];
+    GgArena alloc = gg_arena_init(GG_BUF(slot_scratch));
+    GgBuffer job_id = { 0 };
+    GgBuffer job_status = { 0 };
+    GgError ret = status_keeper_read(&alloc, &job_id, &job_status);
+    if (ret != GG_ERR_OK) {
+        // Nothing pending to flush (or the slot was unreadable).
+        return;
+    }
+    GG_LOGI(
+        "Re-sending pending deployment status %.*s for job %.*s.",
+        (int) job_status.len,
+        job_status.data,
+        (int) job_id.len,
+        job_id.data
+    );
+    (void) update_job(job_id, job_status);
+}
+
 noreturn void *job_listener_thread(void *ctx) {
     (void) ctx;
+
+    pthread_once(&listener_cond_once, init_listener_cond);
+
     (void) gg_backoff(1, 1000, 0, get_thing_name, NULL);
+
+    // Sync the pending-status hint with on-disk state before subscribing, so a
+    // status persisted before a restart is tracked (and re-sent on connect).
+    {
+        static uint8_t slot_scratch[512];
+        GgArena slot_alloc = gg_arena_init(GG_BUF(slot_scratch));
+        (void) status_keeper_read(&slot_alloc, NULL, NULL);
+    }
+
     listen_for_jobs_deployments();
 
     // coverity[infinite_loop]
     while (true) {
+        bool do_describe = false;
+        bool do_flush = false;
         {
             GG_MTX_SCOPE_GUARD(&listener_mutex);
-            while (!needs_describe) {
-                pthread_cond_wait(&listener_cond, &listener_mutex);
+            while (!needs_describe && !needs_flush) {
+                if (status_keeper_has_pending()) {
+                    // A status is awaiting delivery: wake periodically to retry
+                    // the flush even with no reconnect (covers a publish that
+                    // failed while the connection stayed up).
+                    struct timespec deadline;
+                    clock_gettime(CLOCK_MONOTONIC, &deadline);
+                    deadline.tv_sec += STATUS_FLUSH_RETRY_SECONDS;
+                    (void) pthread_cond_timedwait(
+                        &listener_cond, &listener_mutex, &deadline
+                    );
+                    if (status_keeper_has_pending()) {
+                        needs_flush = true;
+                    }
+                } else {
+                    pthread_cond_wait(&listener_cond, &listener_mutex);
+                }
             }
+            do_describe = needs_describe;
             needs_describe = false;
+            do_flush = needs_flush;
+            needs_flush = false;
         }
-        (void) gg_backoff(10, 10000, 0, describe_next_job, NULL);
+        if (do_describe) {
+            (void) gg_backoff(10, 10000, 0, describe_next_job, NULL);
+        }
+        if (do_flush) {
+            flush_pending_status();
+        }
     }
 }
 
@@ -467,6 +635,7 @@ static GgError iot_jobs_on_reconnect(
         GG_LOGD("Reconnected to MQTT; requesting new job query publish.");
         GG_MTX_SCOPE_GUARD(&listener_mutex);
         needs_describe = true;
+        needs_flush = true;
         pthread_cond_signal(&listener_cond);
     }
     return GG_ERR_OK;
@@ -504,10 +673,12 @@ GgError update_current_jobs_deployment_to(
         if (!gg_buffer_eq(deployment_id, current_deployment_id.buf)) {
             return GG_ERR_NOENTRY;
         }
-        memcpy(
-            job_id.data, current_job_id.buf.data, current_deployment_id.buf.len
-        );
-        job_id.len = current_deployment_id.buf.len;
+        if (current_job_id.buf.len == 0) {
+            // Local deployments have no IoT Job — nothing to publish.
+            return GG_ERR_OK;
+        }
+        memcpy(job_id.data, current_job_id.buf.data, current_job_id.buf.len);
+        job_id.len = current_job_id.buf.len;
     }
 
     return update_job_to(job_id, status, socket_name);
@@ -543,5 +714,22 @@ GgError set_jobs_deployment_for_bootstrap(
             return ret;
         }
     }
+
+    last_queue_job_id = GG_BYTE_VEC(last_queue_job_id_buf);
+    GgError ret = gg_byte_vec_append(&last_queue_job_id, job_id);
+    assert(ret == GG_ERR_OK);
+
     return GG_ERR_OK;
+}
+
+void set_current_job(GgBuffer job_id, GgBuffer deployment_id) {
+    GG_MTX_SCOPE_GUARD(&current_job_id_mutex);
+    current_job_id = GG_BYTE_VEC(current_job_id_buf);
+    if (job_id.len > 0) {
+        GgError ret = gg_byte_vec_append(&current_job_id, job_id);
+        assert(ret == GG_ERR_OK);
+    }
+    current_deployment_id = GG_BYTE_VEC(current_deployment_id_buf);
+    GgError ret = gg_byte_vec_append(&current_deployment_id, deployment_id);
+    assert(ret == GG_ERR_OK);
 }

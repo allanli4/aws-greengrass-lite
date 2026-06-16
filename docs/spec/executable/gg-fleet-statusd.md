@@ -15,6 +15,14 @@ See docs at
   reconnection.
 - [fss-6] The service reads periodic update interval from configuration.
 - [fss-7] The service initializes default configuration values at startup.
+- [fss-8] The `messageType` field of published updates is derived from the
+  trigger: `NUCLEUS_LAUNCH`, `CADENCE`, and `NETWORK_RECONFIGURE` produce
+  `COMPLETE`; the remaining listed triggers produce `PARTIAL`.
+- [fss-9] A `COMPONENT_STATUS_CHANGE` update is triggered by `ggdeploymentd`
+  when a component's lifecycle state changes outside of a deployment. These
+  changes are detected by `gghealthd`'s event loop and forwarded by
+  `ggdeploymentd` (which suppresses them while a deployment is in progress, as
+  the deployment path reports status itself).
 
 ## CLI parameters
 
@@ -56,9 +64,29 @@ to send a fleet status update to IoT Core.
     - `THING_GROUP_DEPLOYMENT`
     - `COMPONENT_STATUS_CHANGE`
     - `RECONNECT`
-    - `LAUNCH`
+    - `NUCLEUS_LAUNCH`
+    - `CADENCE`
     - `NETWORK_RECONFIGURE`
+  - [gg-fleet-statusd-send_fleet_status_update-1.3] Trigger values outside the
+    listed set are rejected; the call returns an error and no update is
+    published.
 - [gg-fleet-statusd-send_fleet_status_update-2] `deployment_info` is a required
   parameter of type map
   - [gg-fleet-statusd-send_fleet_status_update-2.1] `deployment_info` includes a
     map of deployment information to send to cloud after a deployment
+- [gg-fleet-statusd-send_fleet_status_update-3] `removed_components` is an
+  optional parameter of type list
+  - [gg-fleet-statusd-send_fleet_status_update-3.1] Each entry shall be of type
+    Buffer holding a component name. Calls with non-buffer entries shall be
+    rejected with an error and no update is published.
+  - [gg-fleet-statusd-send_fleet_status_update-3.2] An absent or empty list
+    means no components were uninstalled by the triggering event.
+  - [gg-fleet-statusd-send_fleet_status_update-3.3] Each listed component shall
+    appear in the published payload's `components[]` array with
+    `status: "UNINSTALLED"`, `version: ""`, `fleetConfigArns: []`, and
+    `isRoot: true`. This signals the cloud to prune the component from its
+    inventory even when `messageType` is `PARTIAL`.
+  - [gg-fleet-statusd-send_fleet_status_update-3.4] When the combined number of
+    running and removed components would exceed the configured component cap,
+    extra UNINSTALLED entries are dropped from the current update and a warning
+    is logged.

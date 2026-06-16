@@ -52,11 +52,41 @@ static const GgBuffer ARCHITECTURE =
     { 0 };
 #endif
 
+static GgError derive_message_type(
+    GgBuffer trigger, GgBuffer *out_message_type
+) {
+    if (gg_buffer_eq(trigger, GG_STR("NUCLEUS_LAUNCH"))
+        || gg_buffer_eq(trigger, GG_STR("CADENCE"))
+        || gg_buffer_eq(trigger, GG_STR("NETWORK_RECONFIGURE"))) {
+        *out_message_type = GG_STR("COMPLETE");
+        return GG_ERR_OK;
+    }
+    if (gg_buffer_eq(trigger, GG_STR("RECONNECT"))
+        || gg_buffer_eq(trigger, GG_STR("LOCAL_DEPLOYMENT"))
+        || gg_buffer_eq(trigger, GG_STR("THING_DEPLOYMENT"))
+        || gg_buffer_eq(trigger, GG_STR("THING_GROUP_DEPLOYMENT"))
+        || gg_buffer_eq(trigger, GG_STR("COMPONENT_STATUS_CHANGE"))) {
+        *out_message_type = GG_STR("PARTIAL");
+        return GG_ERR_OK;
+    }
+    GG_LOGE("Invalid FSS trigger '%.*s'", (int) trigger.len, trigger.data);
+    return GG_ERR_INVALID;
+}
+
 // TODO: Split this function up
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 GgError publish_fleet_status_update(
-    GgBuffer thing_name, GgBuffer trigger, GgMap deployment_info
+    GgBuffer thing_name,
+    GgBuffer trigger,
+    GgMap deployment_info,
+    GgList removed_components
 ) {
+    GgBuffer message_type;
+    GgError ret = derive_message_type(trigger, &message_type);
+    if (ret != GG_ERR_OK) {
+        return ret;
+    }
+
     static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
     GG_MTX_SCOPE_GUARD(&mtx);
 
@@ -70,7 +100,7 @@ GgError publish_fleet_status_update(
 
     // retrieve running components from services config
     GgList components;
-    GgError ret = ggl_gg_config_list(
+    ret = ggl_gg_config_list(
         GG_BUF_LIST(GG_STR("services")), &alloc, &components
     );
     if (ret != GG_ERR_OK) {
@@ -213,6 +243,64 @@ GgError publish_fleet_status_update(
     }
     assert(component_count == component_statuses.list.len);
 
+    // Append entries for components that were just uninstalled by a
+    // deployment. The cloud uses status=UNINSTALLED to prune the component
+    // from its inventory even on PARTIAL updates -- without this, a removed
+    // component lingers in the cloud until the next COMPLETE update
+    // (NUCLEUS_LAUNCH / CADENCE / NETWORK_RECONFIGURE).
+    GG_LIST_FOREACH (removed_obj, removed_components) {
+        if (component_count >= GGL_MAX_GENERIC_COMPONENTS) {
+            GG_LOGW(
+                "Reached component cap (%d); dropping remaining UNINSTALLED "
+                "entries from this fleet status update.",
+                GGL_MAX_GENERIC_COMPONENTS
+            );
+            break;
+        }
+        assert(gg_obj_type(*removed_obj) == GG_TYPE_BUF);
+
+        GgBuffer removed = gg_obj_into_buf(*removed_obj);
+
+        // The local services config tree for this component has already been
+        // deleted, so we cannot look up its prior version or configArns.
+        // Report empty values; the cloud only needs the name and the
+        // UNINSTALLED status to drop it from the inventory.
+        GgMap removed_info = GG_MAP(
+            gg_kv(GG_STR("componentName"), gg_obj_buf(removed)),
+            gg_kv(GG_STR("version"), gg_obj_buf(GG_STR(""))),
+            gg_kv(GG_STR("fleetConfigArns"), gg_obj_list(GG_LIST())),
+            gg_kv(GG_STR("isRoot"), gg_obj_bool(true)),
+            gg_kv(GG_STR("status"), gg_obj_buf(GG_STR("UNINSTALLED")))
+        );
+
+        memcpy(
+            component_infos[component_count],
+            removed_info.pairs,
+            sizeof(component_infos[component_count])
+        );
+        removed_info.pairs = component_infos[component_count];
+
+        ret = gg_obj_vec_push(&component_statuses, gg_obj_map(removed_info));
+        if (ret != GG_ERR_OK) {
+            GG_LOGE(
+                "Failed to add UNINSTALLED entry for %.*s to component list "
+                "with error %s.",
+                (int) removed.len,
+                removed.data,
+                gg_strerror(ret)
+            );
+            continue;
+        }
+
+        GG_LOGD(
+            "Reporting %.*s as UNINSTALLED in fleet status update.",
+            (int) removed.len,
+            removed.data
+        );
+        component_count++;
+    }
+    assert(component_count == component_statuses.list.len);
+
     GgBuffer overall_device_status;
     if (device_healthy) {
         overall_device_status = GG_STR("HEALTHY");
@@ -279,7 +367,7 @@ GgError publish_fleet_status_update(
         gg_kv(GG_STR("thing"), gg_obj_buf(thing_name)),
         gg_kv(GG_STR("sequenceNumber"), gg_obj_i64(sequence)),
         gg_kv(GG_STR("timestamp"), gg_obj_i64(timestamp)),
-        gg_kv(GG_STR("messageType"), gg_obj_buf(GG_STR("COMPLETE"))),
+        gg_kv(GG_STR("messageType"), gg_obj_buf(message_type)),
         gg_kv(GG_STR("trigger"), gg_obj_buf(trigger)),
         gg_kv(GG_STR("overallDeviceStatus"), gg_obj_buf(overall_device_status)),
         gg_kv(GG_STR("components"), gg_obj_list(component_statuses.list)),
