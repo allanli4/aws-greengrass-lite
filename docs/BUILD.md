@@ -212,7 +212,7 @@ The following configuration flags may be set with cmake (with `-D`):
   This can be set to `NONE`, `ERROR`, `WARN`, `INFO`, `DEBUG`, or `TRACE` to set
   the logging level.
 
-- `GG_LOG_TRACE`
+- `GG_LOG_TRAIL`
 
   When set to `ON`, builds with cross-daemon request tracing enabled. Adds a
   `[trace_id:span_id:parent_span_id:file:line]` bracket to every log line
