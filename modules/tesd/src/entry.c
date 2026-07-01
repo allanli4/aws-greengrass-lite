@@ -11,6 +11,7 @@
 #include <ggl/core_bus/gg_config.h>
 #include <ggl/proxy/environment.h>
 #include <tesd.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -21,7 +22,13 @@ static GgError cred_config_change_callback(
     (void) handle;
     (void) data;
     const char *key = (const char *) ctx;
-    GG_LOGI("Configuration key '%s' changed, restarting tesd.", key);
+    // DIAGNOSTIC: include pid so we can distinguish which tesd instance saw
+    // the notification (cascade races produce rapid restarts).
+    GG_LOGI(
+        "Configuration key '%s' changed, restarting tesd. (pid=%d)",
+        key,
+        (int) getpid()
+    );
     _Exit(0);
 }
 
@@ -236,6 +243,18 @@ GgError run_tesd(TesdArgs *args) {
     if (args->interface_name != NULL) {
         interface_name = gg_buffer_from_null_term(args->interface_name);
     }
+
+    // DIAGNOSTIC: log resolved config for cascade debugging.
+    GG_LOGI(
+        "tesd startup config: role_alias='%.*s' cred_endpoint='%.*s' "
+        "thing_name='%.*s'",
+        (int) role_alias.len,
+        (const char *) role_alias.data,
+        (int) cred_endpoint.len,
+        (const char *) cred_endpoint.data,
+        (int) thing_name.len,
+        (const char *) thing_name.data
+    );
 
     ret = initiate_request(
         rootca_path,
