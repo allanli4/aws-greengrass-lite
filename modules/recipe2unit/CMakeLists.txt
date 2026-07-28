@@ -4,5 +4,4 @@
 
 ggl_init_module(
   recipe2unit
-  NO_INLINE_TEST
   LIBS gg-sdk ggl-yaml ggl-recipe ggl-semver core-bus core-bus-gg-config)
