@@ -18,7 +18,10 @@
 ///
 /// For configuration variables i.e. "configuration:<json_ptr>" a config
 /// reader callback is required. Pass GGL_CONFIG_NULL_READER to return an error
-/// if config lookup is not desired.
+/// if config lookup is not desired. If the reader reports GG_ERR_NOENTRY
+/// without writing a value, the recipe variable is written back unchanged,
+/// braces included, and no error is returned; a reader whose caller needs a
+/// nonexistent value to be an error must report a different error.
 ///
 /// An error is returned if the escape sequence does not contain a colon or the
 /// namespace-key pair is not recognized.

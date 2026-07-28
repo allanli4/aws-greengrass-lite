@@ -40,6 +40,13 @@ static GgError core_bus_config_reader_impl(
 
     GgObject result;
     ret = ggl_gg_config_read(key_path.buf_list, alloc, &result);
+    if (ret == GG_ERR_NOENTRY) {
+        // Interpolation leaves nonexistent configuration values as-is, which
+        // would make the unresolved variable a matchable policy pattern. Fail
+        // closed instead so the resource is skipped.
+        GG_LOGE("Config key in policy resource does not exist.");
+        return GG_ERR_CONFIG;
+    }
     if (ret != GG_ERR_OK) {
         GG_LOGE("Failed to read config from core bus.");
         return ret;

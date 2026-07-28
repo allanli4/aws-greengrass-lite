@@ -12,6 +12,7 @@
 #include <gg/log.h>
 #include <gg/object.h>
 #include <gg/types.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,13 +40,19 @@ static GgError split_recipe_variable(
     return GG_ERR_FAILURE;
 }
 
+typedef struct {
+    GgWriter writer;
+    bool written;
+} ConfigValueWriter;
+
 static GgError write_object_as_buffer(void *ctx, GgObject object) {
-    GgWriter *writer = ctx;
+    ConfigValueWriter *config_value = ctx;
+    config_value->written = true;
     if (gg_obj_type(object) == GG_TYPE_BUF) {
-        return gg_writer_call(*writer, gg_obj_into_buf(object));
+        return gg_writer_call(config_value->writer, gg_obj_into_buf(object));
     }
 
-    return gg_json_encode(object, *writer);
+    return gg_json_encode(object, config_value->writer);
 }
 
 GgError ggl_substitute_escape(
@@ -114,9 +121,19 @@ GgError ggl_substitute_escape(
             return ret;
         }
     } else if (gg_buffer_eq(namespace, GG_STR("configuration"))) {
+        ConfigValueWriter config_value = { .writer = writer };
         GgObjectReceiver object_writer
-            = { .ctx = &writer, .submit = write_object_as_buffer };
-        return ggl_config_reader_call(config_reader, key, object_writer);
+            = { .ctx = &config_value, .submit = write_object_as_buffer };
+        ret = ggl_config_reader_call(config_reader, key, object_writer);
+        if ((ret != GG_ERR_NOENTRY) || config_value.written) {
+            return ret;
+        }
+        // Nonexistent configuration values are left as-is.
+        ret = GG_ERR_OK;
+        ggl_writer_call_chained(&ret, writer, GG_STR("{"));
+        ggl_writer_call_chained(&ret, writer, recipe_variable);
+        ggl_writer_call_chained(&ret, writer, GG_STR("}"));
+        return ret;
     }
 
     GG_LOGE(
@@ -150,6 +167,34 @@ static GgError dummy_config_reader_call(
 
 static GgConfigReader dummy_config_reader(void) {
     return (GgConfigReader) { .reader = dummy_config_reader_call };
+}
+
+static GgError missing_config_reader_call(
+    void *ctx, GgBuffer key, GgObjectReceiver receiver
+) {
+    (void) ctx;
+    (void) key;
+    (void) receiver;
+    return GG_ERR_NOENTRY;
+}
+
+static GgConfigReader missing_config_reader(void) {
+    return (GgConfigReader) { .reader = missing_config_reader_call };
+}
+
+static GgError partial_write_reader_call(
+    void *ctx, GgBuffer key, GgObjectReceiver receiver
+) {
+    (void) ctx;
+    (void) key;
+    (void) gg_object_receiver_submit(
+        receiver, gg_obj_buf(GG_STR("partial"))
+    );
+    return GG_ERR_NOENTRY;
+}
+
+static GgConfigReader partial_write_reader(void) {
+    return (GgConfigReader) { .reader = partial_write_reader_call };
 }
 
 static GgBuffer run_substitute(GgBuffer escape_seq) {
@@ -207,6 +252,38 @@ GG_TEST_DEFINE(substitute_artifacts_decompressed_path) {
 GG_TEST_DEFINE(substitute_configuration_uses_reader) {
     GgBuffer result = run_substitute(GG_STR("configuration:/some/key"));
     GG_TEST_ASSERT_BUF_EQUAL(GG_STR("dummy_config_value"), result);
+}
+
+GG_TEST_DEFINE(substitute_configuration_missing_key_left_as_is) {
+    static uint8_t buf[64];
+    GgByteVec vec = GG_BYTE_VEC(buf);
+    GgError ret = ggl_substitute_escape(
+        gg_byte_vec_writer(&vec),
+        GG_STR("configuration:/no/such/key"),
+        TEST_ROOT_PATH,
+        TEST_COMPONENT,
+        TEST_VERSION,
+        TEST_THING_NAME,
+        missing_config_reader()
+    );
+    TEST_ASSERT_EQUAL_INT(GG_ERR_OK, ret);
+    GG_TEST_ASSERT_BUF_EQUAL(GG_STR("{configuration:/no/such/key}"), vec.buf);
+}
+
+GG_TEST_DEFINE(substitute_configuration_partial_write_fails) {
+    static uint8_t buf[64];
+    GgByteVec vec = GG_BYTE_VEC(buf);
+    GgError ret = ggl_substitute_escape(
+        gg_byte_vec_writer(&vec),
+        GG_STR("configuration:/no/such/key"),
+        TEST_ROOT_PATH,
+        TEST_COMPONENT,
+        TEST_VERSION,
+        TEST_THING_NAME,
+        partial_write_reader()
+    );
+    TEST_ASSERT_NOT_EQUAL(GG_ERR_OK, ret);
+    GG_TEST_ASSERT_BUF_EQUAL(GG_STR("partial"), vec.buf);
 }
 
 GG_TEST_DEFINE(substitute_configuration_null_reader_fails) {
