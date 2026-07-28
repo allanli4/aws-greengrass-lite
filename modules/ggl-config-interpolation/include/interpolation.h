@@ -20,6 +20,9 @@
 /// reader callback is required. Pass GGL_CONFIG_NULL_READER to return an error
 /// if config lookup is not desired.
 ///
+/// If a configuration variable refers to a value that does not exist, the
+/// recipe variable is written back unchanged, braces included.
+///
 /// An error is returned if the escape sequence does not contain a colon or the
 /// namespace-key pair is not recognized.
 GgError ggl_substitute_escape(
